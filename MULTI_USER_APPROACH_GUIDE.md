@@ -246,6 +246,34 @@ Before rolling back:
 
 If you need to roll back one project's work while preserving another's, you'll need to use `git revert` manually on the specific commits rather than the job-level rollback.
 
+### Push and Pull Cadence
+
+DGS has two categories of repository: the **planning repo** (containing `.planning/`, ideas, specs, STATE.md, ROADMAP.md) and **code repos** (the product code that phases build). Each has different push timing because they carry different risks when pushed in an inconsistent state.
+
+**The principle: push at DGS workflow boundaries, not on a time interval.** Every command that produces a complete artifact — a spec, a CONTEXT.md, a PLAN.md, a SUMMARY.md — leaves the repo in a consistent state and is a safe push point. Anything in between (mid-task during plan execution) is not.
+
+| When | Planning repo | Code repos |
+|------|:---:|:---:|
+| After adding ideas / writing specs / approving specs | Yes | — |
+| After `/dgs:discuss-phase` | Yes | — |
+| After `/dgs:plan-phase` | Yes | — |
+| After each plan completes within a phase | Yes | Yes (push branch) |
+| After full phase completes | Yes | Yes (open PR) |
+| Before `/dgs:pause-work` | Yes | Yes |
+| After milestone completion | Yes | Yes |
+| Mid-task during plan execution | No | No |
+
+**Why mid-task pushes are unsafe:**
+
+- **Planning repo:** STATE.md may say task 3 is in-progress but no SUMMARY.md exists yet. Another team member pulling this state sees an inconsistent picture — the position has advanced but there's no record of what was done. If they start a different phase or quick task based on this state, they may make incorrect assumptions.
+- **Code repos:** A task may have committed several files but not yet reached a compiling or test-passing state. Pushing a broken branch triggers CI failures and confuses reviewers.
+
+**When to pull:**
+
+Pull the planning repo before starting any command that reads shared state — planning, executing, creating jobs, or checking progress. This ensures you're working against the latest ideas, specs, roadmap, and phase state. For code repos, pull main (or the relevant phase branch) before starting execution to pick up any merged work from other phases or projects.
+
+In practice, a good habit is: **pull before you start, push when you finish.** "Start" and "finish" are defined by DGS workflow boundaries, not clock time.
+
 ---
 
 ## Multi-Repo Considerations
