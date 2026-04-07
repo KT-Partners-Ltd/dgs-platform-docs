@@ -16,6 +16,86 @@ DGS tracks state in shared files (STATE.md, ROADMAP.md, manifest counters). Ther
 
 ---
 
+## Getting Started for Teams
+
+Step-by-step setup for a team adopting DGS on a shared product.
+
+### 1. Initialise the product
+
+```bash
+/dgs:init-product
+```
+
+This creates the `.planning/` directory structure and `config.json` with team-ready defaults.
+
+### 2. Register code repositories
+
+```bash
+/dgs:add-repo api-service ../api-service
+/dgs:add-repo web-app ../web-app
+```
+
+Register every code repo the product touches. DGS will sync all of them.
+
+### 3. Choose a branching strategy
+
+| If your team... | Use | Why |
+|-----------------|-----|-----|
+| Wants PRs per phase | `phase` | Finest isolation, one branch per phase per project |
+| Wants PRs per release | `milestone` | One branch per milestone, fewer merge points |
+| Works solo or trusts main | `none` | Simplest, all commits to current branch |
+
+```bash
+dgs-tools config-set git.branching_strategy phase
+```
+
+For teams, `phase` is recommended -- it gives each phase its own branch for independent code review.
+
+### 4. Choose a sync mode
+
+| If your team... | Set sync to | Why |
+|-----------------|-------------|-----|
+| Is new to DGS and wants control | `prompt` (default) | See and approve each sync operation |
+| Has established workflows and wants hands-off sync | `auto` | Silent sync, report only failures |
+| Prefers manual git operations | `off` | DGS never touches remotes |
+
+```bash
+# Set both push and pull at once
+dgs-tools config-set git.sync prompt
+
+# Or set independently
+dgs-tools config-set git.sync_push auto
+dgs-tools config-set git.sync_pull prompt
+```
+
+Fresh installs default to `prompt`. If your team prefers different sync behaviour for push vs pull (e.g., auto-push but prompt-pull), set them independently.
+
+### 5. Configure user identity
+
+Each team member should set their identity on their machine:
+
+```bash
+/dgs:set-profile
+```
+
+This ensures ideas, specs, and plans are attributed to the correct author.
+
+### 6. Agree on project ownership
+
+- **Ideas and specs:** Anyone can add at any time -- file-per-entity design prevents conflicts
+- **Phase execution:** One person per phase at a time (the core rule)
+- **Quick tasks:** Only when no phase is actively executing
+
+### 7. Verify the setup
+
+```bash
+/dgs:health
+```
+
+Confirms repos are registered, config is valid, and git state is clean.
+
+---
+
 ## What's Safe in Parallel
 
 ### Ideas and Spec Development
@@ -248,31 +328,56 @@ If you need to roll back one project's work while preserving another's, you'll n
 
 ### Push and Pull Cadence
 
-DGS has two categories of repository: the **planning repo** (containing `.planning/`, ideas, specs, STATE.md, ROADMAP.md) and **code repos** (the product code that phases build). Each has different push timing because they carry different risks when pushed in an inconsistent state.
+DGS can automatically synchronise with remotes at workflow boundaries. Behaviour is controlled by two config keys — `git.sync_push` and `git.sync_pull` — each set to one of three modes:
 
-**The principle: push at DGS workflow boundaries, not on a time interval.** Every command that produces a complete artifact — a spec, a CONTEXT.md, a PLAN.md, a SUMMARY.md — leaves the repo in a consistent state and is a safe push point. Anything in between (mid-task during plan execution) is not.
+| Mode | Behaviour | Recommended for |
+|------|-----------|-----------------|
+| `off` | No sync, no prompts — identical to pre-v17.0 | Solo developers, manual git users |
+| `prompt` | Asks before pull/push with Yes as default | Teams starting with DGS (fresh install default) |
+| `auto` | Silent sync, reports only failures | Established teams, CI/CD, job execution |
 
-| When | Planning repo | Code repos |
-|------|:---:|:---:|
-| After adding ideas / writing specs / approving specs | Yes | — |
-| After `/dgs:discuss-phase` | Yes | — |
-| After `/dgs:plan-phase` | Yes | — |
-| After each plan completes within a phase | Yes | Yes (push branch) |
-| After full phase completes | Yes | Yes (open PR) |
-| Before `/dgs:pause-work` | Yes | Yes |
-| After milestone completion | Yes | Yes |
-| Mid-task during plan execution | No | No |
+**What syncs:** Not every command triggers sync. A per-workflow cadence table determines which workflows pull, push, or both. The four patterns are:
+
+| Cadence pattern | When it applies | Examples |
+|-----------------|-----------------|----------|
+| Pull + Push | Workflows that read shared state and produce artifacts | `execute-phase`, `plan-phase`, `write-spec`, `run-job` |
+| Push only | Workflows that create artifacts but don't need latest state first | `pause-work`, `add-idea`, `import-spec`, `map-codebase` |
+| Pull only | Workflows that consume state without producing shareable changes | `resume-work`, `progress`, `find-related-ideas` |
+| No sync | Read-only or diagnostic commands | `help`, `list-ideas`, `search`, `debug` |
+
+For the full table with per-command reasoning, see `references/sync-cadence.md`.
+
+**The principle remains the same: push at DGS workflow boundaries, not on time intervals.** The difference is DGS now handles this automatically based on mode and cadence. Every command that produces a complete artifact — a spec, a CONTEXT.md, a PLAN.md, a SUMMARY.md — leaves the repo in a consistent state and is a safe push point.
+
+**Safe push points:**
+
+| When | Sync direction | Notes |
+|------|:---:|-------|
+| Before workflow starts | Pull | Ensures latest state |
+| After workflow completes | Push | Shares completed artifacts |
+| After each plan in execute-phase | Push (mid-workflow) | Incremental sharing, silent |
+| After each phase in run-job | Push (mid-workflow) | Same |
+| Mid-task during plan execution | Never | Repo may be in inconsistent state |
 
 **Why mid-task pushes are unsafe:**
 
-- **Planning repo:** STATE.md may say task 3 is in-progress but no SUMMARY.md exists yet. Another team member pulling this state sees an inconsistent picture — the position has advanced but there's no record of what was done. If they start a different phase or quick task based on this state, they may make incorrect assumptions.
+- **Planning repo:** STATE.md may say task 3 is in-progress but no SUMMARY.md exists yet. Another team member pulling this state sees an inconsistent picture.
 - **Code repos:** A task may have committed several files but not yet reached a compiling or test-passing state. Pushing a broken branch triggers CI failures and confuses reviewers.
 
-**When to pull:**
+**Failure handling:** Pull failure aborts before DGS state changes — no work is lost and no state is corrupted. Push failure warns but does not abort; work is committed locally and can be pushed manually later. In `prompt` mode, pull failure offers to continue without pulling.
 
-Pull the planning repo before starting any command that reads shared state — planning, executing, creating jobs, or checking progress. This ensures you're working against the latest ideas, specs, roadmap, and phase state. For code repos, pull main (or the relevant phase branch) before starting execution to pick up any merged work from other phases or projects.
+**Configuration:**
 
-In practice, a good habit is: **pull before you start, push when you finish.** "Start" and "finish" are defined by DGS workflow boundaries, not clock time.
+```bash
+# Set both directions at once
+dgs-tools config-set git.sync prompt
+
+# Or set independently for different push vs pull behaviour
+dgs-tools config-set git.sync_push auto
+dgs-tools config-set git.sync_pull prompt
+
+# Or use /dgs:settings for interactive toggle
+```
 
 ---
 
@@ -306,6 +411,7 @@ Person C: Quick tasks, bug fixes, documentation
 Config:
   branching_strategy: "phase"
   commit_docs: true
+  git.sync: "prompt"
 ```
 
 **Rules:**
@@ -324,6 +430,7 @@ Person C: Shared quick tasks, cross-project fixes
 Config:
   branching_strategy: "phase"
   Multi-project v2 with PROJECTS.md and REPOS.md
+  git.sync: "auto"
 ```
 
 **Rules:**
@@ -356,8 +463,10 @@ This is the simplest multi-user pattern. The developer does all execution; other
 | **Plan Phase** | Yes | Yes | Diff phase only | Diff phase only | Yes |
 | **Execute Phase** | Yes | Yes | Diff phase only | Never same phase | Risky |
 | **Quick Task** | Yes | Yes | Yes | Risky | Never |
+| **Sync Pull** | Yes | Yes | Yes | Yes | Yes |
+| **Sync Push** | Yes | Yes | Yes | Yes | Yes |
 
-"Diff phase only" = safe if working on different phases. "Risky" = can work if touching different files/repos, but no guarantees.
+"Diff phase only" = safe if working on different phases. "Risky" = can work if touching different files/repos, but no guarantees. Sync operations are safe alongside any activity because they operate at the git level before/after DGS state modifications.
 
 ---
 
