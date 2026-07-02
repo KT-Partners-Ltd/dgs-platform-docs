@@ -2,7 +2,7 @@
 
 > See also: [USER-GUIDE.md](USER-GUIDE.md) for workflow overview and usage examples.
 
-DGS stores product-level settings in `dgs.config.json` (in your planning root). This file is shared across all projects in the product. Configure during `/dgs:init-product`, and update later with `/dgs:settings`.
+DGS stores product-level settings in `dgs.config.json` (in your planning root). This file is shared across all projects in the product. Recommended defaults are applied automatically by `/dgs:init-product`. Update any setting later with `/dgs:settings`.
 
 Review API keys are stored separately in `review-keys.json` (see [Cross-LLM Review](#cross-llm-review) below).
 
@@ -22,10 +22,22 @@ Review API keys are stored separately in `review-keys.json` (see [Cross-LLM Revi
     "plan_check": true,
     "verifier": true,
     "nyquist_validation": true,
-    "codereview": false
+    "codereview": false,
+    "four_eyes": "off"
+  },
+  "testing": {
+    "packages": {
+      "tool": "auto",
+      "severity_threshold": "low",
+      "include_dev_dependencies": true,
+      "timeout_seconds": 300
+    }
   },
   "git": {
-    "base_branch": "main"
+    "base_branch": "main",
+    "completion_mode": "merge",
+    "sync_push": "off",
+    "sync_pull": "off"
   }
 }
 ```
@@ -56,8 +68,41 @@ Review API keys are stored separately in `review-keys.json` (see [Cross-LLM Revi
 | `workflow.verifier` | `true`, `false` | `true` | Post-execution verification against phase goals |
 | `workflow.nyquist_validation` | `true`, `false` | `true` | Validation architecture research during plan-phase; 8th plan-check dimension |
 | `workflow.codereview` | `true`, `false` | `false` | 3-pass, 9-agent multi-agent code review after each plan execution. Auto-fixes low-risk issues in a separate commit. |
+| `workflow.four_eyes` | `off`, `warn`, `enforce` | `off` | Completion governance: checks whether the user completing a milestone or quick task contributed to the work. `warn` proceeds with audit log; `enforce` blocks unless `--force`. See [Multi-User Guide](MULTI_USER_APPROACH_GUIDE.md#completion-governance-four-eyes). |
 
 Disable these to speed up phases in familiar domains or when conserving tokens.
+
+### Testing & Package Scanning
+
+Configuration for `/dgs:package-scan` (introduced in v23.1). See [`references/package-scan-config.md`](../deliver-great-systems/references/package-scan-config.md) for the full user-facing reference, tool installation steps, and report-format details.
+
+| Setting | Options | Default | What it Controls |
+|---------|---------|---------|------------------|
+| `testing.packages.tool` | `auto`, `snyk`, `osv`, `native` | `auto` | Tool-selection strategy. `auto` cascades Snyk → OSV-Scanner → ecosystem-native tool based on availability. A pinned tool that is not installed causes a fast-fail with an install hint (no silent fallback). |
+| `testing.packages.severity_threshold` | `critical`, `high`, `medium`, `low` | `low` | Minimum severity included in the report. Also the default for the `--threshold` CLI flag. |
+| `testing.packages.include_dev_dependencies` | `true`, `false` | `true` | Whether devDependencies are scanned. Maps to tool-specific argv (`--production` for Snyk, `--omit=dev` for npm audit, etc.). Also the default for the `--include-dev-deps` / `--no-include-dev-deps` CLI flag. |
+| `testing.packages.timeout_seconds` | Integer in `[10, 3600]` | `300` | Per-scan-invocation timeout (seconds). Applies to each spawned tool subprocess. |
+
+**Local-only key (gitignored, stored in `config.local.json`):**
+
+| Setting | Format | What it Controls |
+|---------|--------|------------------|
+| `testing.packages.snyk_token` | Snyk API token string | Snyk authentication. MUST be set via `dgs-tools config-local-set testing.packages.snyk_token <token>` — `config-set` rejects this key with guidance to use the local path. Alternatively set `SNYK_TOKEN` in your shell env or run `snyk auth` (DGS honours all three sources in this priority: `config.local.json` → `SNYK_TOKEN` → `snyk config get api`). |
+
+Set via (shared keys):
+```
+dgs-tools config-set testing.packages.tool snyk
+dgs-tools config-set testing.packages.severity_threshold high
+dgs-tools config-set testing.packages.include_dev_dependencies false
+dgs-tools config-set testing.packages.timeout_seconds 600
+```
+
+Set via (local-only Snyk token):
+```
+dgs-tools config-local-set testing.packages.snyk_token <your-token>
+```
+
+**Tool installation** — see [`references/package-scan-config.md`](../deliver-great-systems/references/package-scan-config.md#tool-installation) for install commands per tool (Snyk, OSV-Scanner, pip-audit, govulncheck, bundler-audit).
 
 ### Cross-LLM Review
 
@@ -95,12 +140,31 @@ Edit this file directly to configure review keys. Keys can be literal values or 
 | Setting | Options | Default | What it Controls |
 |---------|---------|---------|------------------|
 | `git.base_branch` | Branch name string | `main` | Integration target for all merge, rebase, and push operations |
+| `git.completion_mode` | `merge`, `pr` | `merge` | How completed quicks and milestones integrate: `merge` rebases and merges locally; `pr` rebases, pushes with `--force-with-lease`, and opens a GitHub pull request per touched repo. The GitHub CLI (`gh`) is required **only** in `pr` mode. See [Completion Modes: Merge vs PR](GIT-WORKFLOW.md#completion-modes-merge-vs-pr). |
+| `git.sync_push` | `off`, `prompt`, `auto` | `off` | Whether workflows push planning-repo commits to the remote at their built-in cadence points |
+| `git.sync_pull` | `off`, `prompt`, `auto` | `off` | Whether workflows pull shared planning state from the remote at their built-in cadence points |
+| `git.sync` | `off`, `prompt`, `auto` | — | Convenience shorthand: setting it writes the same value to **both** `git.sync_push` and `git.sync_pull` in one call. It is not a third stored setting. |
 
-DGS uses git worktrees for all isolation. Each milestone and product-level quick task gets its own worktree on a dedicated branch. There is no `branching_strategy` config — the worktree model is always active. See [Quick Workflows](MILESTONE-JOBS-GUIDE.md#quick-workflows) for how worktrees are managed during quick tasks, and the milestone lifecycle section for milestone worktrees.
+DGS uses git worktrees for all isolation. Each milestone and product-level quick task gets its own worktree on a dedicated branch. There is no branch-strategy setting to choose — the worktree model is always active. See [Quick Workflows](MILESTONE-JOBS-GUIDE.md#quick-workflows) for how worktrees are managed during quick tasks, and the milestone lifecycle section for milestone worktrees.
+
+**Sync cadence is fixed, not configurable.** Which workflows sync — and whether they pull, push, or both — is a built-in classification baked into the sync engine (every DGS workflow is classified as pull+push, push-only, pull-only, or no-sync; e.g. `execute-phase` and `plan-phase` pull and push, `add-idea` pushes only, `progress` pulls only, `help` never syncs). The `git.sync_push` / `git.sync_pull` settings control only the *mode* at those built-in cadence points: `off` skips the sync, `prompt` asks first, `auto` syncs silently. You cannot change which workflows sync, only how the sync behaves when a workflow reaches its cadence point.
+
+### Local Execution State (config.local.json)
+
+Alongside the shared, git-tracked config file, DGS keeps per-machine state in `config.local.json` (gitignored, next to the shared config). The entire `execution.*` namespace routes here — these keys never appear in the tracked config file:
+
+| Key | Shape | What it Tracks |
+|-----|-------|----------------|
+| `execution.console_bindings` | `{ <session-id>: <context-slug> }` | Which context each Claude Code session is focused on — how per-console focus persists across commands in parallel sessions. Bound by `/dgs:switch-context` (and on quick creation); dropped when the bound context completes. |
+| `execution.executing` | `{ <slug>: { started_at, session_id } }` | The execution lock — which session is currently executing a phase for a given context. Heartbeat-refreshed at wave boundaries; stale after 6h. |
+| `execution.active_context` | Context slug string | The default focused context (worktree focus pointer) used when no flag, session binding, or `DGS_CONTEXT` env applies. |
+| `execution.fast_pr_map` | `{ <branch>: <pr-record> }` | Fast-PR branch tracking used by the stateless `fast/*` branch self-prune. |
+
+These keys are **system-managed** — DGS reads and writes them under a cross-process lock; you should not normally hand-edit them. They are useful when troubleshooting: a stuck execution lock (e.g. after a crashed run) is released with `dgs-tools execution-lock release <slug> --force` — see [Recovering a Stuck Run](GIT-WORKFLOW.md#recovering-a-stuck-run-the-execution-lock). Per-console focus resolution is described in [Parallel Consoles & Focus](GIT-WORKFLOW.md#parallel-consoles--focus).
 
 ### Conflict Resolution
 
-When `/dgs:complete-milestone` merges branches back to the base branch, merge conflicts can occur — especially with the `phase` strategy where multiple branches are merged sequentially.
+When `/dgs:complete-milestone` rebases and merges a worktree branch back to the base branch, merge conflicts can occur.
 
 DGS handles this automatically:
 

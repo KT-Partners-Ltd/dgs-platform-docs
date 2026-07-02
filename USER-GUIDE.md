@@ -12,7 +12,7 @@ Detailed reference for specific topics lives in dedicated sub-documents:
 - **[Configuration Guide](CONFIGURATION-GUIDE.md)** -- dgs.config.json schema, workflow toggles, cross-LLM review, conflict resolution
 - **[Milestone Jobs & Execution Lifecycle](MILESTONE-JOBS-GUIDE.md)** -- Quick workflows, milestone jobs, phase audit, model profiles
 - **[Setup Guide](SETUP-GUIDE.md)** -- Multi-repo setup, codebase mapping, product file structure
-- **[Multi-User Approach Guide](MULTI_USER_APPROACH_GUIDE.md)** -- Coordinating DGS across multiple developers
+- **[Multi-User Approach Guide](MULTI_USER_APPROACH_GUIDE.md)** -- Coordinating DGS across multiple developers, four-eyes completion governance
 - **[Context Monitor](context-monitor.md)** -- Context window usage monitoring and optimization
 
 ---
@@ -93,8 +93,8 @@ Detailed reference for specific topics lives in dedicated sub-documents:
   /dgs:add-idea --auto       /dgs:update-idea           /dgs:research-idea
        │                     /dgs:reject-idea            /dgs:develop-idea
        ▼                     /dgs:restore-idea                │
-  .planning/ideas/                │                           │
-    pending/                      │                           │
+     ideas/                       │                           │
+       │                          │                           │
        │                          │                           │
        │    Select 1+ pending ideas                           │
        │◄─────────────────────────┘                           │
@@ -137,7 +137,7 @@ Detailed reference for specific topics lives in dedicated sub-documents:
        │                     │
        ▼                     ▼
   /dgs:new-project      /dgs:new-milestone
-  --auto @spec.md       --auto <spec-id>
+                           --auto <spec-id>
   (create project)      (add to existing project)
 ```
 
@@ -182,7 +182,7 @@ Detailed reference for specific topics lives in dedicated sub-documents:
          │     ├── Features researcher
          │     ├── Architecture researcher
          │     └── Pitfalls researcher
-         │           │
+         │            │
          │     ┌──────▼──────┐
          │     │ RESEARCH.md │
          │     └──────┬──────┘
@@ -269,6 +269,40 @@ rapid prototyping phases where test infrastructure isn't the focus.
         └──────────────────┘
 ```
 
+### Dependency Scanning Workflow
+
+Run on demand at any point in the project lifecycle — no roadmap entry or phase required.
+
+```
+[Dev]
+  │
+  ├─► /dgs:package-scan
+  │      │
+  │      ├─ Enumerate targets: every repo in REPOS.md + product root
+  │      ├─ Detect ecosystems per target (manifest-file inspection)
+  │      ├─ Expand monorepos: npm/pnpm/Yarn workspaces, Maven modules, go.work
+  │      ├─ Select tool: Snyk → OSV-Scanner → native (ecosystem-specific)
+  │      ├─ Run tool per target, collect JSON output
+  │      ├─ Normalise findings to canonical shape (test-gate contract)
+  │      ├─ Resolve plan provenance via `git log -S <package> -- <manifest>`
+  │      └─ Commit report to active phase / active milestone / project root
+  │
+  └─► Developer reviews report
+         │
+         ├─ Triage findings by severity (critical → high → medium → low)
+         ├─ Apply suggested fix commands (`npm install ...`, `pip install -U ...`, etc.)
+         └─ (Future) /dgs:plan-test-gaps consumes the findings YAML to generate fix phases
+```
+
+**When to run:**
+- Before a release — surface any new critical vulnerabilities before shipping.
+- After dependency changes — catch regressions introduced by `npm install`, `go mod tidy`, etc.
+- Ad-hoc — no state change to your project; the report file is the only artefact.
+
+**Zero-config mode:** with nothing installed beyond `npm`, `/dgs:package-scan` falls back to `npm audit` for Node, `pip-audit` for Python (if installed), `govulncheck` for Go (if installed), and `bundler-audit` for Ruby (if installed). Install OSV-Scanner (a single binary) or configure a Snyk token for full multi-ecosystem coverage in one invocation.
+
+See the [Command Reference](COMMAND-REFERENCE.md#testing--dependency-scanning) and [Configuration Reference](CONFIGURATION-GUIDE.md#testing--package-scanning) for flag details and config keys.
+
 ---
 
 ## Context Tiers
@@ -348,7 +382,7 @@ For the machine-readable tier definitions parsed at runtime, see `references/con
 | `/dgs:insert-phase [N]` | Insert urgent work between phases |
 | `/dgs:list-phase-assumptions [N]` | See Claude's intended approach |
 | `/dgs:map-codebase [repo]` | Map repos, synthesize codebase docs |
-| `/dgs:new-milestone [name]` | Start next version cycle |
+| `/dgs:new-milestone [name] [--adhoc]` | Start next version cycle; `--adhoc` creates a lightweight container milestone |
 | `/dgs:new-project [--auto]` | Project identity: questioning → PROJECT.md |
 | `/dgs:plan-milestone-gaps` | Create phases to close audit gaps |
 | `/dgs:plan-phase [N]` | Create phase execution plans |
@@ -373,6 +407,7 @@ For the machine-readable tier definitions parsed at runtime, see `references/con
 |---------|-------------|
 | `/dgs:audit-milestone` | Verify milestone completion |
 | `/dgs:complete-milestone` | Archive milestone, tag release |
+| `/dgs:abandon-milestone` | Discard an ad-hoc container milestone, restore planning docs |
 | `/dgs:validate-phase` | Validate phase plan structure |
 | `/dgs:verify-phase` | Automated phase verification |
 | `/dgs:verify-work [N]` | Interactive UAT |
@@ -412,7 +447,7 @@ claude --dangerously-skip-permissions
 ### New Project from Existing Document
 
 ```bash
-/dgs:new-project --auto @prd.md   # Create PROJECT.md from your doc
+/dgs:new-project                 # Create PROJECT.md from your doc
 /dgs:new-milestone               # Research, requirements, roadmap
 /clear
 /dgs:discuss-phase 1               # Normal flow from here
@@ -427,7 +462,7 @@ claude --dangerously-skip-permissions
 /dgs:develop-idea           # Optional: discuss + research to refine
 /dgs:write-spec             # Select ideas, draft PRD, cross-LLM review
 /dgs:list-specs             # Verify spec is finalized
-/dgs:new-project --auto @.planning/specs/my-feature.md   # Create project from spec
+/dgs:new-project            # Create project from spec
 /dgs:new-milestone          # Research, requirements, roadmap
 /clear
 /dgs:discuss-phase 1        # Normal phase workflow from here
@@ -492,7 +527,7 @@ claude --dangerously-skip-permissions
 
 ### "Project already initialized"
 
-You ran `/dgs:new-project` but `.planning/PROJECT.md` already exists. This is a safety check. If you want to start over, delete the `.planning/` directory first.
+You ran `/dgs:new-project` but `PROJECT.md` already exists. This is a safety check. If you want to start over, clear the planning folder.
 
 ### Context Degradation During Long Sessions
 
@@ -520,7 +555,7 @@ Switch to budget profile: `/dgs:set-profile budget`. Disable research and plan-c
 
 ### Working on a Sensitive/Private Project
 
-Set `commit_docs: false` during `/dgs:init-product` or via `/dgs:settings`. Add `.planning/` to your `.gitignore`. Planning artifacts stay local and never touch git.
+Set `commit_docs: false` via `/dgs:settings` (defaults to `true`).
 
 ### DGS Update Overwrote My Local Changes
 
@@ -529,6 +564,20 @@ Since v1.17, the installer backs up locally modified files to `dgs-local-patches
 ### Subagent Appears to Fail but Work Was Done
 
 A known workaround exists for a Claude Code classification bug. DGS's orchestrators (execute-phase, quick) spot-check actual output before reporting failure. If you see a failure message but commits were made, check `git log` -- the work may have succeeded.
+
+### Ad-hoc Milestones
+
+An ad-hoc container milestone is a lightweight, worktree-isolated milestone with no spec or roadmap — just a branch that batches small work behind an atomic, no-leak window.
+
+Use one when you want a run of quicks and fasts to ship together under a single version (or be discarded as a unit) without leaking changes onto main.
+
+Lifecycle:
+
+1. `/dgs:new-milestone --adhoc "Experiments" --version v0.1` snapshots the base ref and opens the milestone (creates the milestone worktree and branch).
+2. Quicks and fasts run during the milestone auto-join the milestone branch unchanged — no extra flags.
+3. `/dgs:complete-milestone` ships the batch as one vX.Y (a relaxed, quicks-only completion gate applies), or `/dgs:abandon-milestone` restores planning docs from the snapshot behind a `--confirmed` gate.
+
+The `adhoc` marker is visible in `/dgs:progress` and the completion preamble.
 
 ### Worktree Commands
 
@@ -543,6 +592,118 @@ Most users never run these directly — DGS manages worktrees automatically. The
 | `dgs-tools worktrees prune` | Clean up orphaned entries (missing directories) |
 
 See [How Git is Used](GIT-WORKFLOW.md) for a conceptual overview of the worktree model.
+
+### PR-Based Completion (`git.completion_mode: pr`)
+
+By default, completing a quick or milestone merges to `base_branch` locally. On branch-protected or review-gated repos, switch completion to pull requests:
+
+```
+dgs-tools config set git.completion_mode pr
+```
+
+The key lives in the tracked `config.json` (valid values: `merge`, `pr`; unset means `merge`). In `pr` mode the GitHub CLI (`gh`) must be installed and authenticated (`gh auth login`) — **only** this mode needs it; the default `merge` path never invokes `gh`.
+
+The lifecycle, end to end:
+
+1. **Open** — `/dgs:complete-quick` rebases onto base, pushes the branch with `--force-with-lease`, and opens a PR (one per touched repo): `PR opened: <url>`. The quick parks at `pr_open`; its worktree stays.
+2. **Update** — push review fixes by committing in the worktree and re-running `/dgs:complete-quick`: the same PR gets the new head (`PR updated — head pushed`). A title or body you edited on GitHub is never overwritten.
+3. **Reap** — after the PR merges on GitHub, re-run `/dgs:complete-quick` (or sweep all merged quicks at once with `dgs-tools reap-quicks`): DGS verifies the merge via `gh`, pulls base, and removes the worktree and branch.
+
+Edge cases:
+
+- **`gh` outage during reap:** DGS fails closed — `Couldn't reach GitHub. If you know it merged, re-run with --merged`. The `--merged` flag asserts the merge and reaps without `gh`.
+- **PR closed without merging:** the reap refuses (your work is unmerged); re-run with `--confirm-cleanup` to remove the worktree anyway.
+- **Multi-repo:** one PR per touched repo; nothing reaps until *every* repo's PR is merged.
+
+Milestones follow the same model through `/dgs:complete-milestone`, with archival happening at reap — never at PR open. Full model: [Completion Modes: Merge vs PR](GIT-WORKFLOW.md#completion-modes-merge-vs-pr); sweep command: [reap-quicks](COMMAND-REFERENCE.md) in the Command Reference.
+
+### Per-Console Context
+
+The active context — the milestone or one of the standalone quicks that DGS commands operate on — is a property of your **console**, not a global setting. Multiple consoles can each drive a different milestone or quick **in parallel** without clobbering each other: resolution, commit routing, and the status bar all track the focus of the console they run in.
+
+Resolution precedence, highest first:
+
+1. `--context <slug>` — a one-shot override on a single command
+2. **session binding** — the per-Claude-Code-session focus (`CLAUDE_CODE_SESSION_ID` → `config.local.json` `execution.console_bindings`)
+3. `DGS_CONTEXT` — the per-shell environment variable (raw-shell path)
+4. the config default (`execution.active_context`)
+5. none (product / main)
+
+#### Claude Code sessions (the default — no shell setup)
+
+Inside a Claude Code session, each session binds **its own** focus automatically — there is no `.zshrc` edit and no relaunch. DGS keys the binding on the session's `CLAUDE_CODE_SESSION_ID` (present in every command subprocess) and stores it in `config.local.json` under `execution.console_bindings` (`{ "<session_id>": "<context-slug>" }`), so two Claude Code sessions on the same project never clobber one shared focus pointer:
+
+- **`switch-context <slug>`** binds the current session to that milestone or quick (in-session, immediately).
+- **Quick-create** (`/dgs:quick`) binds the new quick to the session that created it.
+- **`complete-quick` / `abandon-quick` / `complete-milestone`** unbind the finishing session (and drop every session's binding that pointed at the removed slug).
+
+The status bar shows **each console's own focus** (it resolves through the same session-keyed resolver), so two side-by-side sessions display different contexts. `dgs-tools context` prints `<slug> (session)` when the console is bound this way.
+
+#### Raw-shell users (DGS_CONTEXT)
+
+In a plain terminal (not a Claude Code session), there is no `CLAUDE_CODE_SESSION_ID`, so the per-shell `DGS_CONTEXT` environment variable is the binding path. This works exactly like `KUBECONFIG`, `AWS_PROFILE`, or `pyenv shell`: the binding lives in the shell's environment, and DGS reads it.
+
+**Bind a console with a `dgs-bind` shell function.** A child process cannot mutate its parent shell's environment, so DGS emits the `export` line for the shell to `eval`. Add this helper to your shell rc (`~/.zshrc` / `~/.bashrc`):
+
+```sh
+dgs-bind() { export DGS_CONTEXT="$1"; }
+```
+
+Then bind this console to a context. `switch-context --print` is **read-only** — it emits `export DGS_CONTEXT=<slug>` and writes nothing to config:
+
+```sh
+eval "$(dgs-tools switch-context my-quick-slug --print)"
+# this console now drives `my-quick-slug`; other consoles are unaffected
+```
+
+(Or just `dgs-bind my-quick-slug` if you already know the slug.)
+
+**Release on finalize.** When you `complete-quick` or `abandon-quick` a quick this console is bound to, DGS prints an `unset DGS_CONTEXT` advisory so the console stops pointing at a removed worktree. Clear it with:
+
+```sh
+unset DGS_CONTEXT
+```
+
+**One-shot override.** To run a single command against a different context without rebinding the console, pass `--context <slug>`. The flag wins over `DGS_CONTEXT` for that command only, and does **not** overwrite the env var — so a stale `--context` (a slug with no live worktree) warns and falls through to your inherited `DGS_CONTEXT`:
+
+```sh
+dgs-tools quick "fix typo" --context other-milestone
+```
+
+**Check your binding.** `dgs-tools context` prints the resolved context and where it came from as `<slug> (<source>)` — e.g. `quick-A (session)` (bound to this Claude Code session via `console_bindings`), `quick-A (env)` (bound via `DGS_CONTEXT`), `quick-A (flag)` (a one-shot `--context`), or `v25.1 (default)` (no per-console binding — using the shared config default / milestone). Use it whenever you are unsure which milestone or quick this console is about to act on:
+
+```sh
+dgs-tools context
+# quick-A (env)
+```
+
+**Unbound warning.** A console with no `DGS_CONTEXT` (and no `--context`) prints `Notice: unbound — defaulting to '<milestone>'` once before a context-sensitive command (`complete-quick`, `abandon-quick`, `reap-quicks`, `quick`, `fast`, `milestone …`), so you never silently act on the milestone when you meant a quick. Bind with `dgs-bind <slug>` or pass `--context <slug>` to silence it.
+
+**Completion is context-typed.** `complete-quick` refuses a milestone-bound console and `complete-milestone` refuses a quick-bound console — each tells you the slug it is bound to and the correct command to run instead. This stops a milestone-bound console from accidentally finalizing through the quick path (and vice versa).
+
+**The cap counts quicks only.** The standalone-quick cap (3) counts quick worktrees only — the milestone context never consumes a slot, so a focused milestone plus three parallel quicks is the expected steady state.
+
+### Stale Milestone Dashboard (shipped milestone shows in-progress)
+
+**Symptom:** After a milestone is archived and tagged, `/dgs:list-projects` still shows a stale in-progress `Phase:` (e.g. `3 of 8`) or a false `executing` status for that project — because its `STATE.md` was never flipped to shipped.
+
+**Going forward this self-corrects:** milestone completion now resets the `Phase:` line automatically. The repair below is only needed for projects already shipped before that fix.
+
+**Repair with `dgs-tools state reconcile-milestone`:**
+
+- **Conservative & idempotent.** It only heals a project *proven* shipped — it requires **both** a `## <version>` heading in `MILESTONES.md` **and** a matching git tag `<version>`. Otherwise it does nothing (`not_shipped`). Re-running an already-correct project is a safe no-op (`already_correct`), so it's safe to run anywhere.
+- **What it changes:** `STATE.md` only — frontmatter `status → milestone_shipped` and `progress → 100%`, plus the body's Progress bar, Current focus, Status, Last activity, and the `Phase:` line (reset to a "between milestones" value).
+- **Scope limits:** current project only; never touches ROADMAP / MILESTONES / archives / git; does **not** recompute legacy-format progress counters; there is no `--all` mode yet.
+
+**Playbook** (for dashboards that may be silently stale):
+
+1. Update DGS so the command exists: `/dgs:update`
+2. For each affected project (safe to run everywhere — it self-detects):
+   ```
+   dgs-tools switch-project <slug>
+   dgs-tools state reconcile-milestone --raw
+   ```
+3. Verify with `/dgs:list-projects` — shipped projects should read "between milestones", and none should show `executing`.
 
 ---
 
@@ -560,3 +721,4 @@ See [How Git is Used](GIT-WORKFLOW.md) for a conceptual overview of the worktree
 | Costs running high | `/dgs:set-profile budget` and `/dgs:settings` to toggle agents off |
 | Merge conflict during milestone | Automatic — DGS classifies and resolves; escalates LOW-confidence to you |
 | Update broke local changes | `/dgs:reapply-patches` |
+| Shipped milestone shows in-progress/executing | `dgs-tools state reconcile-milestone` (per project) |

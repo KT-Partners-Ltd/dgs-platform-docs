@@ -24,7 +24,7 @@ DGS supports managing multiple source code repos from a single planning repo. Al
 ```bash
 cd ~/projects
 mkdir my-product && cd my-product
-/dgs:init-product                    # creates .planning/ structure
+/dgs:init-product                    # creates .planning/ structure with recommended defaults
 /dgs:add-repo api-service            # registers ../api-service
 /dgs:add-repo web-app                # registers ../web-app
 /dgs:add-repo mobile-app             # registers ../mobile-app
@@ -215,12 +215,17 @@ For reference, here is what DGS creates. Product-level files are shared across a
     debug/                          #   Active debug sessions
     quick/                          #   Quick task artifacts
       N-task-slug/                  #     Per-task plan and summary
-    phases/                         #   Phase directories
-      XX-phase-name/
-        XX-YY-PLAN.md              #     Atomic execution plans
-        XX-YY-SUMMARY.md           #     Execution outcomes and decisions
-        CONTEXT.md                 #     Your implementation preferences
-        RESEARCH.md                #     Ecosystem research findings
-        VERIFICATION.md            #     Post-execution verification results
-        XX-VALIDATION.md           #     Test coverage contract (Nyquist layer)
+    phases/                         #   Phase directories (per-milestone versioned, v25.0+)
+      <version>/                    #   Active milestone version namespace (e.g. v25.0)
+        NN-phase-name/              #     Numbering RESTARTS at 01 per milestone
+          NN-MM-PLAN.md            #       Atomic execution plans
+          NN-MM-SUMMARY.md         #       Execution outcomes and decisions
+          CONTEXT.md               #       Your implementation preferences
+          RESEARCH.md              #       Ecosystem research findings
+          VERIFICATION.md          #       Post-execution verification results
+          NN-VALIDATION.md         #       Test coverage contract (Nyquist layer)
+      # Pre-existing flat-layout projects keep the legacy flat phases/NN-slug/
+      # layout as a preserved fallback (the resolver is dual-mode):
+      NN-phase-name/                #   Legacy flat layout (no version namespace)
+        ...                         #     same per-phase files as above
 ```

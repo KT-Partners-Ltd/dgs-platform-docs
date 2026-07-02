@@ -26,6 +26,7 @@ DGS commands span a range of scope and automation. The hierarchy below orders th
 |---------|---------|-------------|
 | `/dgs:new-project` | Project identity: questioning → PROJECT.md | Start of a new project (run new-milestone after) |
 | `/dgs:new-milestone [name]` | Start next version cycle | After new-project or completing a milestone |
+| `/dgs:abandon-milestone` | Discard an ad-hoc milestone, restore planning docs | Abandoning an ad-hoc container |
 | `/dgs:discuss-phase [N]` | Capture implementation decisions | Before planning, to shape how it gets built |
 | `/dgs:plan-phase [N]` | Research + plan + verify | Before executing a phase |
 | `/dgs:execute-phase <N>` | Execute all plans in parallel waves | After planning is complete |
@@ -50,9 +51,11 @@ Usage: `/dgs:new-project --auto spec-review-config` (from finalized spec)
 Start a new milestone cycle for an existing project.
 
 - `--auto <spec-id>`: Derive milestone from a finalized spec without interactive questioning
+- `--adhoc`: Create a lightweight ad-hoc container milestone (provisional version, snapshot base ref, milestone worktree); quicks & fasts route into it; completion relaxes the readiness gate
 
 Usage: `/dgs:new-milestone` (interactive milestone creation)
 Usage: `/dgs:new-milestone --auto spec-review-config` (from finalized spec)
+Usage: `/dgs:new-milestone --adhoc "Experiments" --version v0.1` (ad-hoc container milestone)
 
 **`/dgs:discuss-phase [N]`**
 Extract implementation decisions that guide research and planning.
@@ -125,6 +128,8 @@ After all code repos merge: updates STATE.md in planning repo to mark milestone 
 
 **Multi-repo:** Repos process sequentially (repo 1 then repo 2, etc.). Stops on first failure. Already-merged repos are skipped on re-run (idempotent).
 
+**PR mode (`git.completion_mode: pr`):** instead of steps 4–6, each repo's milestone branch is pushed with `--force-with-lease` and an idempotent PR is opened via `gh`; the milestone parks at `pr_open` with a per-repo PR record (`entry.prs`). Re-run after all PRs merge to reap the worktree and archive — archival happens at reap, never at PR open. Four-eyes governance gates at PR open only. `--merged` asserts the merge without `gh`. `gh` is required only in this mode. See [Completion Modes: Merge vs PR](GIT-WORKFLOW.md#completion-modes-merge-vs-pr).
+
 **If rebase conflicts require manual resolution:**
 
 ```bash
@@ -140,6 +145,18 @@ git rebase --continue
 **Job-mode behavior:** When invoked from a milestone job with `<job-mode>silent</job-mode>`, all interactive gates are auto-resolved: scope confirmation is auto-approved, incomplete requirements are acknowledged, phase directories are archived automatically, branch handling is kept for manual review, and tag push is skipped for safety.
 
 Usage: `/dgs:complete-milestone 1.0.0`
+
+**`/dgs:abandon-milestone`**
+
+Cleanly discard an ad-hoc container milestone. Removes all milestone worktrees and local
+branches and path-scoped-restores the project planning docs (PROJECT.md, STATE.md,
+ROADMAP.md, REQUIREMENTS.md, config.json) to their pre-milestone snapshot, committing the
+reversion. Ad-hoc-only — refuses on spec/phase-driven milestones with guidance. Destructive;
+requires confirmation. Removes local worktrees/branches only — warns (does not delete) if a
+milestone branch was pushed to a remote. Lifecycle cleanup removes the snapshot base ref and
+ad-hoc config keys.
+
+Usage: `/dgs:abandon-milestone` (interactive; requires confirmation)
 
 See [How Git is Used](GIT-WORKFLOW.md) for a conceptual overview of the rebase-before-merge strategy.
 
@@ -219,6 +236,8 @@ Execute small, ad-hoc tasks with atomic commits and STATE.md tracking.
 - `--main`: Force product-level quick (own worktree off main) even when a milestone is active
 - `--fast`: Equivalent to `/dgs:fast` — no subagents, single atomic commit
 
+Completion honors `git.completion_mode`: in `pr` mode, `/dgs:complete-quick` opens a PR per touched repo instead of merging locally, and the quick parks at `pr_open` until the PR merges (reap with a re-run or `dgs-tools reap-quicks`). See [Completion Modes: Merge vs PR](GIT-WORKFLOW.md#completion-modes-merge-vs-pr).
+
 Usage: `/dgs:quick` (prompts for task description)
 Usage: `/dgs:quick fix the login button` (with inline description)
 Usage: `/dgs:quick --full add input validation` (with plan-checking and verification)
@@ -235,6 +254,52 @@ Make a trivial edit with a single atomic commit. The lightest DGS command.
 
 Usage: `/dgs:fast fix the login button color` (make edit and commit)
 Usage: `/dgs:fast update timeout --dry-run` (preview changes first)
+
+### Testing & Dependency Scanning
+
+| Command | Purpose | When to Use |
+|---------|---------|-------------|
+| `/dgs:package-scan` | Scan registered repos + product root for dependency vulnerabilities and licence issues | Before release, after dependency changes, or on demand |
+
+#### Testing & Dependency Scanning Details
+
+**`/dgs:package-scan [flags]`**
+
+Standalone dependency vulnerability + licence scanner that runs across every repo in `REPOS.md` plus the product root.
+
+- **Tool cascade (default `auto`):** Snyk (if token configured) → OSV-Scanner (if on PATH) → ecosystem-native tool per repo (`npm audit`, `pip-audit`, `govulncheck`, `bundler-audit`). Java has no standard native tool — scans fall back to Snyk or OSV.
+- **Ecosystems detected via manifest files:** Node.js (`package.json`, `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`), Python (`requirements.txt`, `Pipfile.lock`, `poetry.lock`, `pyproject.toml`, `setup.py`), Go (`go.mod`, `go.sum`), Ruby (`Gemfile.lock`, `Gemfile`), Java (`pom.xml`, `build.gradle`, `build.gradle.kts`).
+- **Monorepo awareness:** npm/pnpm/Yarn workspaces, Maven multi-module, and Go workspaces (`go.work`) are expanded into per-workspace targets with `manifest_path` attribution in each finding. Gradle sub-projects and Python src-layout monorepos are deferred (PKG-41, PKG-42 — treated as single-module).
+- **Report placement:** `{phase-dir}/{phase}-PACKAGE-SCAN.md` when an active phase is set, else `milestones/v{X}.{Y}-PACKAGE-SCAN.md` when an active milestone, else timestamped `PACKAGE-SCAN-{YYYY-MM-DD-HHmm}.md` at the product root.
+- **Report format:** YAML frontmatter carries `type`, `date`, `tool`, `repos_scanned`, severity counts, `duration`, and a `findings:` array in canonical shape. Body renders a per-repo × severity summary table, per-severity sections, and a Licence Compliance section when Snyk is the selected tool.
+- **Plan provenance:** each finding carries optional `introduced_in_commit` (7-char SHA) and `introduced_in_plan` (DGS plan-id) resolved via `git log -S <package> -- <manifest>` on the manifest file.
+- **Exit code:** 0 when the scan completes (findings are not errors). Non-zero is reserved for tool unavailability or infrastructure failure.
+
+**Flags:**
+
+| Flag | Effect |
+|------|--------|
+| `--threshold critical\|high\|medium\|low` | Filter findings at or above the severity. Default from `testing.packages.severity_threshold` config. |
+| `--repo <name>` | Restrict scan to one registered repo (errors with a valid-repo list if the name is unknown). |
+| `--json` | Emit machine-readable JSON to stdout in addition to writing the markdown report. |
+| `--include-dev-deps` / `--no-include-dev-deps` | Include or exclude devDependencies. Default from `testing.packages.include_dev_dependencies` config. |
+
+**Configuration:** see [Configuration Reference](CONFIGURATION-GUIDE.md#testing--package-scanning) for `testing.packages.*` keys (tool selection, severity threshold, Snyk token placement, timeout).
+
+**Related files in the DGS install:**
+- `deliver-great-systems/references/package-scan-config.md` — full user-facing config reference + tool installation instructions.
+- `deliver-great-systems/workflows/package-scan.md` — command workflow definition.
+- `deliver-great-systems/templates/package-scan-report.md` — documentation-only example of the report format.
+- `deliver-great-systems/skills/dgs-tests/package-scan.md` — test-gate plugin skill file (inert, forward-compatible with the skills engine).
+
+Usage:
+```
+/dgs:package-scan                              # scan everything with cascade default
+/dgs:package-scan --threshold high             # high/critical only
+/dgs:package-scan --repo api                   # single repo
+/dgs:package-scan --json                       # emit JSON output
+/dgs:package-scan --threshold critical --repo worker --no-include-dev-deps
+```
 
 ### Ideas & Specs
 
@@ -296,7 +361,7 @@ Research an idea's feasibility and technical landscape via subagent.
 
 - Investigates five adaptive dimensions: web search, codebase analysis, landscape survey, approach identification, and feasibility assessment
 - For multi-repo projects, research is partitioned by repo with separate sections
-- Creates a structured research document at `.planning/docs/ideas/pending/{slug}-research.md` with frontmatter (type, idea_id, idea_title, date, repos_analysed)
+- Creates a structured research document at `.planning/docs/ideas/{slug}-research.md` with frontmatter (type, idea_id, idea_title, date, repos_analysed)
 - Appends a Research Log entry to the idea file with: Summary, Document link, Key Finding, and Recommendation
 - Can be run multiple times -- each run appends a new Research Log entry and updates the research document
 - Both the research document and updated idea file are committed together
@@ -525,8 +590,46 @@ This means uploading a target architecture or product summary via `/dgs:add-doc 
 
 | Command | Purpose | When to Use |
 |---------|---------|-------------|
-| `/dgs:init-product` | Initialize planning repo structure | Setting up multi-repo management |
+| `/dgs:init-product` | Initialize planning repo structure with recommended defaults | Setting up multi-repo management |
 | `/dgs:add-repo [name]` | Register a sibling repo | Adding a new repo to the project |
 | `/dgs:remove-repo [name]` | Unregister a repo from REPOS.md | Removing a repo from the product |
 | `/dgs:overlap-check` | Show repos touched by multiple active projects | Detect potential cross-project conflicts |
 | `/dgs:health` | Validate repo reachability and config | After setup or when repos seem unreachable |
+
+### Per-Console Context
+
+The active context (a milestone or a standalone quick) is resolved **per console** with precedence `--context` flag > **session binding** (`CLAUDE_CODE_SESSION_ID` → `execution.console_bindings`) > `DGS_CONTEXT` env var > config default (`execution.active_context`) > none. Inside a Claude Code session the session binding is the default path (no shell setup); `DGS_CONTEXT` is the raw-shell path. See [Per-Console Context](USER-GUIDE.md#per-console-context) in the User Guide for both workflows.
+
+**Session binding (`CLAUDE_CODE_SESSION_ID` → `execution.console_bindings`).** In a Claude Code session, `switch-context <slug>` and quick-create bind the **current session** by writing `config.local.json` `execution.console_bindings[CLAUDE_CODE_SESSION_ID] = <slug>` instead of clobbering the shared `execution.active_context` — so parallel sessions on one project each keep their own focus. `complete-quick` / `abandon-quick` / `complete-milestone` drop every binding pointing at the finished slug. No `.zshrc` edit and no relaunch are needed.
+
+| Command | Purpose | When to Use |
+|---------|---------|-------------|
+| `dgs-tools switch-context <slug>` | In a Claude Code session: bind THIS session (`execution.console_bindings[CLAUDE_CODE_SESSION_ID]`). In a raw shell with no session id: repoint the shared config default | Focus the current console on a milestone or quick for parallel work |
+| `dgs-tools switch-context <slug> --print` | Raw-shell path: emit `export DGS_CONTEXT=<slug>` on stdout (read-only — writes no config). Eval it to bind a plain terminal: `eval "$(dgs-tools switch-context <slug> --print)"` | Bind a non-Claude-Code terminal to a context |
+| `dgs-tools context` (or `context show`) | Print the resolved per-console context + source as `<slug> (session\|flag\|env\|default)`; a session-bound console shows `<slug> (session)` | Check what this console is bound to |
+
+**`--context <slug>` flag.** A one-shot per-command override accepted on the context-sensitive command set: `fast`, `quick`, `complete-quick`, `abandon-quick`, and `complete-milestone`. It binds the command's context at the FLAG precedence level (flag > session binding > `DGS_CONTEXT` env > config default) and never overwrites the inherited session binding or `DGS_CONTEXT` — a stale `--context` (no live worktree) warns and falls through to the next level.
+
+**Per-context executor lock (`execution.executing`).** While `/dgs:execute-phase` runs a wave, it records a lock in `config.local.json` `execution.executing`, keyed by **context slug** (`{ "<slug>": { started_at, session_id } }`). `switch-context` refuses to flip focus into or out of a context that is mid-execution (drift guard), but a lock on one context never blocks an independent console working a different context. Each entry honours a 6h-stale escape and the `--force` override; `--print` (read-only) is exempt.
+
+**`unset DGS_CONTEXT` advisory.** When `complete-quick` or `abandon-quick` finalizes a quick the current console is bound to (`DGS_CONTEXT` equals that slug), the tool emits an `unset DGS_CONTEXT` line (stderr) and an `unbind` field in its JSON, so a raw shell can clear a binding that now points at a removed worktree. (Session bindings are cleared automatically.)
+
+**Safety guards (Phase 9).** `complete-quick` refuses a milestone-bound console and `complete-milestone` refuses a quick-bound console (the actionable message names the bound slug and the correct command). An unbound console prints a one-time `unbound — defaulting to <milestone>` notice before context-sensitive commands. The standalone-quick cap (3) counts quick worktrees only — the milestone context never consumes a slot.
+
+### PR Completion & `reap-quicks`
+
+**`git.completion_mode`.** `complete-quick` and `complete-milestone` honor the `git.completion_mode` config key: `merge` (the default — an absent key means `merge`) or `pr`. In `pr` mode, completion rebases, pushes the branch with `--force-with-lease`, and opens (or updates) a GitHub pull request per touched repo instead of merging locally; the quick or milestone parks at `pr_open` until its PRs merge, then a re-run reaps it. The GitHub CLI (`gh`) is a hard dependency **only** in `pr` mode (and for fast-PR) — the default `merge` path never invokes it. Full model: [Completion Modes: Merge vs PR](GIT-WORKFLOW.md#completion-modes-merge-vs-pr).
+
+**`dgs-tools reap-quicks`**
+Sweep every live quick and reap the ones whose PRs have merged. For each quick at `pr_open` with a stored PR record, the sweep checks merge state via `gh` — every repo of a multi-repo quick must be merged; a partial merge never reaps. Merged quicks are reaped (base branch pulled, worktree and branch removed, console bindings dropped). Everything else is skipped with a reason, and a `gh` outage on one quick fails that quick only — the sweep continues. Output is a per-quick summary with `reaped` / `skipped` / `failed` counts.
+
+| Flag | Effect |
+|------|--------|
+| `--merged` | Assert the merge and reap **without** `gh` — the probe is bypassed entirely. The escape hatch when `gh` is down or unauthenticated and you know the PR merged. |
+| `--slug <slug>` | Narrow the sweep to a single named quick. |
+| `--force-reap` | Override the post-merge-work guard (commits made in the worktree after the last pushed PR head otherwise block the reap). |
+
+A quick whose PR was closed **without** merging is never swept — it is skipped with guidance to run `complete-quick <slug> --confirm-cleanup` instead.
+
+Usage: `dgs-tools reap-quicks` (sweep all merged quicks)
+Usage: `dgs-tools reap-quicks --merged --slug 260702-abc` (assert one quick merged, no gh)
