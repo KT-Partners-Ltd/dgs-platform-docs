@@ -47,6 +47,17 @@ Every piece of work has a **base** — the branch its changes ride on. DGS resol
 
 The `--main` mentions elsewhere ([Command Reference](COMMAND-REFERENCE.md), [Milestone Jobs Guide](MILESTONE-JOBS-GUIDE.md)) all refer to this model. How the *completion* of that work then lands — local merge or pull request — is a separate, orthogonal switch: [Completion Modes: Merge vs PR](#completion-modes-merge-vs-pr).
 
+### Selecting the Base: `--from <branch>`
+
+By default a product-level quick is cut from `git.base_branch` (normally `main`). Pass `--from <branch>` to cut it from a different branch instead — useful for stacking a fix on top of a release branch or another in-flight line of work.
+
+- **Implies product mode:** like `--main`, `--from` **always** creates a new product-level standalone off `<branch>` — even from a milestone-bound or focused-quick console. You never need to add `--main` yourself. The only refusal is `--from` combined with `--fast` (fast never makes a worktree).
+- **Reuse-or-create (typo guard):** if `<branch>` already exists locally or on origin it is reused (fast-forwarded when the local ref is stale). A brand-new branch is confirm-created off `main` and pushed; a rejected push rolls the branch back — so a mistyped name can never silently spawn a stray branch.
+- **Validated first:** the branch name is checked (`git check-ref-format` plus a shell-safety pass) before any git operation runs.
+- **Locks the quick:** a non-`main` `--from` pins the quick to complete back onto that same branch. See [Entry-State Lock Lifecycle](#entry-state-lock-lifecycle) for how `create_base`, `locked`, and `target_branch` are stamped and enforced.
+
+> **Note:** `--from main` (or `--from` naming whatever `git.base_branch` resolves to) behaves like a plain product-level quick — same base, no lock.
+
 ---
 
 ## Worktree Lifecycle
@@ -152,6 +163,26 @@ dgs-tools config set git.completion_mode pr
 ```
 
 The value is enum-validated — anything other than `merge` or `pr` is rejected.
+
+### Selecting the Target: `--onto <branch>`
+
+Where `--from` chooses the base a quick is cut *from*, `--onto <branch>` chooses the **target** it completes *onto* — the branch the quick's own commits are rebased onto and then merged (or PR'd) into. The default target is `git.base_branch` (normally `main`).
+
+- **Honored at every completion entry point.** The same resolution and guards apply whether completion runs via `complete-quick`, the standalone `dgs-tools worktrees rebase-and-merge`, or `milestone complete-pr` — one shared target resolver serves all three.
+- **Both completion modes.** In `merge` mode the target is the fast-forward-merge destination; in `pr` mode it is the PR `--base` and the base of the PR-body commit range. Rebase-onto-target is mandatory in both — there is no retarget-without-rebase shortcut.
+- **Shared provisioning.** A target that does not exist locally or on origin is created off `main` and pushed by the same shared helper `--from` uses (confirm-gated for a brand-new branch), so base and target selection provision branches identically.
+- **Live-PR consistency guard.** On a re-run against a still-open PR, the live PR's base and head are verified against the resolved target *before* any rebase or force-push, and the check fails closed if `gh` is unavailable — a `gh` outage is never read as "matches".
+
+> **Note:** With no `--from` and no `--onto`, base and target are both `git.base_branch`/`main` and behavior is exactly as before v25.4 — byte-for-byte, in both completion modes. The transparency line `→ completing onto '<branch>'` is printed **only** for a non-default target; the plain default path stays silent.
+
+### Entry-State Lock Lifecycle
+
+`--from` and `--onto` meet on the worktree entry, through three fields — `create_base`, `locked`, and `target_branch` — stamped at create and enforced at completion:
+
+- **Stamp at create.** Every entry records `create_base` (the branch it was cut from). A non-default `--from` additionally stamps `locked: true` and `target_branch` = that base, pinning the quick to complete back onto where it started.
+- **Locked entries are enforced pre-flight.** A locked entry *must* complete onto its stamped `target_branch`; a mismatched `--onto` is rejected **before any git or `gh` operation** — the error names both the stamped branch and the one you asked for, plus the fix.
+- **Unlocked entries stamp after success.** A `main`-created entry has no `target_branch` until its **first** successful completion, which stamps it (compare-and-set: a concurrent stamp is *adopted, never overwritten*). Bare re-runs then reuse that stored target, and a *different* `--onto` afterward is rejected rather than silently retargeted.
+- **Legacy back-compat.** A pre-v25.4 entry missing all three fields behaves as created-from-`main`, `locked=false` — it completes exactly as it always did.
 
 ### The PR Flow (`completion_mode: pr`)
 
