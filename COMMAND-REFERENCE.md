@@ -204,6 +204,7 @@ Usage: `/dgs:plan-milestone-gaps --auto` (non-interactive gap closure)
 | `/dgs:fast <desc>` | Trivial edit with single atomic commit, no subagents | Typo fix, config tweak, one-line change |
 | `/dgs:quick` | Ad-hoc task with DGS guarantees | Bug fixes, small features, config changes |
 | `/dgs:debug [desc]` | Systematic debugging with persistent state | When something breaks |
+| `/dgs:code-review [scope\|PR URL]` | On-demand multi-pass code review — auto-fix in local mode, comment-only on PRs | Before complete-quick/complete-milestone, four-eyes PR review, after manual/skip-DGS edits |
 | `/dgs:add-todo [desc]` | Capture an idea for later | Think of something during a session |
 | `/dgs:check-todos [area]` | List pending todos, optionally filtered by area | Review captured ideas |
 | `/dgs:cleanup` | Archive completed quick task directories | Reduce clutter in quick/ directory |
@@ -254,6 +255,22 @@ Make a trivial edit with a single atomic commit. The lightest DGS command.
 
 Usage: `/dgs:fast fix the login button color` (make edit and commit)
 Usage: `/dgs:fast update timeout --dry-run` (preview changes first)
+
+**`/dgs:code-review [staged|unstaged|branch|<file>|<PR URL>] [--repo <name>]`**
+On-demand, human-invoked code review at lifecycle boundaries. Distinct from (a) the automatic per-plan codereview gate inside `execute-phase`, which reviews plan-executor output non-interactively, and (b) `/dgs:diff-report`, which summarizes a diff without reviewing it.
+
+- Default scope is context-aware: `branch` when a context is focused or the tree is clean; `staged` otherwise
+- **Local mode** (staged/unstaged/branch/file): 3 passes, 12+ parallel agent reviews (Correctness & Security, Standards & Patterns, Simplification, Comprehension Gate, Symmetry & Sweep with cross-reference patterns + per-stack footgun checklists, Failure-Trace, plus optional Deployment & Infrastructure when `.claude/codereview-context.md` exists). Aggressively auto-fixes CRITICAL/HIGH/MEDIUM findings, guarded by a consumer-dependent do-not-autofix list; fixes are test-verified before committing. On `branch` scope, fixes land as one distinct `fix(review):` commit (clean tree in, clean tree out); on staged/unstaged/file scopes, fixes stay uncommitted in the working tree so your next DGS commit carries them
+- **PR mode** (GitHub PR URL): review-only — never edits files. Resolves stale review threads, posts ONE consolidated comment, stops. Requires authenticated `gh`; resolves the registered repo and pins `gh` calls with `-R`; fork-safe (`pull/<n>/head` fetching)
+- `--repo <name>`: pick a registered repo explicitly
+- Outputs: writes `CODE-REVIEW-<timestamp>.md` at the planning root and logs a Code Reviews row + Last activity in STATE.md
+- When to run: before `/dgs:complete-quick` (`branch` — whole-quick review including `/dgs:fast` inline commits the per-plan gate never saw); before `/dgs:complete-milestone` (`branch` in the milestone worktree — cross-plan integration issues); as the four-eyes reviewer on a DGS-opened PR (PR URL — second contributor posts a consolidated comment, never edits the author's branch); after manual/skip-DGS edits (`staged`/`unstaged`); external contributions (PR URL)
+
+Usage: `/dgs:code-review` (context-aware default)
+Usage: `/dgs:code-review branch` (review all commits on this branch vs base)
+Usage: `/dgs:code-review src/lib/foo.cjs` (review one file)
+Usage: `/dgs:code-review https://github.com/owner/repo/pull/123` (PR review mode)
+Usage: `/dgs:code-review branch --repo my-api` (pick a registered repo explicitly)
 
 ### Testing & Dependency Scanning
 

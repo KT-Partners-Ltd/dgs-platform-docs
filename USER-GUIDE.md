@@ -498,10 +498,27 @@ claude --dangerously-skip-permissions
 ### Preparing for Release
 
 ```bash
+/dgs:code-review branch     # Milestone-level code audit — catches cross-plan issues the per-plan gate can't see
 /dgs:audit-milestone        # Check requirements coverage, detect stubs
 /dgs:plan-milestone-gaps    # If audit found gaps, create phases to close them
 /dgs:complete-milestone     # Archive, tag, done
 ```
+
+### On-Demand Code Review
+
+`/dgs:code-review` is the human-invoked complement to the automatic per-plan codereview gate — run it yourself at lifecycle boundaries the per-plan gate never sees:
+
+```bash
+/dgs:code-review                  # context-aware default: branch when focused/clean, staged otherwise
+/dgs:code-review branch           # before /dgs:complete-quick — whole-quick review
+/dgs:code-review branch           # before /dgs:complete-milestone — run in the milestone worktree
+/dgs:code-review staged           # after manual/skip-DGS edits
+/dgs:code-review https://github.com/owner/repo/pull/123   # review any PR on a registered repo
+```
+
+**Local mode** (staged/unstaged/branch/file) aggressively auto-fixes CRITICAL/HIGH/MEDIUM findings — on `branch` scope the fixes land as one `fix(review):` commit, otherwise they stay in your working tree. **PR mode** (a PR URL) is comment-only — it never edits files and requires an authenticated `gh`.
+
+See [Command Reference](COMMAND-REFERENCE.md#brownfield--utilities-details) for the full scope, mode, and output details.
 
 ### Speed vs Quality Presets
 
@@ -614,6 +631,8 @@ Edge cases:
 - **`gh` outage during reap:** DGS fails closed — `Couldn't reach GitHub. If you know it merged, re-run with --merged`. The `--merged` flag asserts the merge and reaps without `gh`.
 - **PR closed without merging:** the reap refuses (your work is unmerged); re-run with `--confirm-cleanup` to remove the worktree anyway.
 - **Multi-repo:** one PR per touched repo; nothing reaps until *every* repo's PR is merged.
+
+The four-eyes reviewer reviews the DGS-opened PR with `/dgs:code-review <PR URL>` — it resolves stale review threads and posts one consolidated comment, never editing the author's branch.
 
 Milestones follow the same model through `/dgs:complete-milestone`, with archival happening at reap — never at PR open. Full model: [Completion Modes: Merge vs PR](GIT-WORKFLOW.md#completion-modes-merge-vs-pr); sweep command: [reap-quicks](COMMAND-REFERENCE.md) in the Command Reference.
 

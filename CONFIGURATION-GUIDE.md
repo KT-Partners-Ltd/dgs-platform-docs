@@ -149,6 +149,26 @@ DGS uses git worktrees for all isolation. Each milestone and product-level quick
 
 **Sync cadence is fixed, not configurable.** Which workflows sync — and whether they pull, push, or both — is a built-in classification baked into the sync engine (every DGS workflow is classified as pull+push, push-only, pull-only, or no-sync; e.g. `execute-phase` and `plan-phase` pull and push, `add-idea` pushes only, `progress` pulls only, `help` never syncs). The `git.sync_push` / `git.sync_pull` settings control only the *mode* at those built-in cadence points: `off` skips the sync, `prompt` asks first, `auto` syncs silently. You cannot change which workflows sync, only how the sync behaves when a workflow reaches its cadence point.
 
+**Automatic repo-local git settings (conflict hygiene).** These are NOT `dgs.config.json` keys — they are plain git settings DGS writes directly into each managed repo's local git config:
+
+| Key | Value | When applied | What it does |
+|-----|-------|---------------|---------------|
+| `rerere.enabled` | `true` | `repos add` and worktree create | Records conflict resolutions so git can replay them if the same conflict recurs |
+| `rerere.autoupdate` | `true` | `repos add` and worktree create | Stages a replayed resolution automatically |
+| `merge.conflictStyle` | `zdiff3` | `repos add` and worktree create | Adds a merge-base section inside conflict markers |
+
+Scope is repo-local only — DGS never passes `--global` or `--system`, so your global git config is never touched. The setting is shared by a repo's main checkout and all of its worktrees, so applying it once at `repos add` time already covers every worktree cut later. Applying it is warn-only: a failure prints a stderr warning and never blocks `repos add` or worktree creation.
+
+Inspect the current values inside a repo with:
+
+```bash
+git config --local --get-regexp 'rerere|conflictStyle'
+```
+
+To opt out, unset a key: `git config --local --unset <key>` — but DGS re-applies these settings on the next worktree create, so removal is per-occasion, not permanent.
+
+See [Automatic Conflict Hygiene](GIT-WORKFLOW.md#automatic-conflict-hygiene-rerere--zdiff3) for why each key matters. The `zdiff3` merge-base section is what the [Conflict Resolution](#conflict-resolution) engine below reads to classify a hunk.
+
 ### Local Execution State (config.local.json)
 
 Alongside the shared, git-tracked config file, DGS keeps per-machine state in `config.local.json` (gitignored, next to the shared config). The entire `execution.*` namespace routes here — these keys never appear in the tracked config file:

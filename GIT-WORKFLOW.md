@@ -145,6 +145,26 @@ git rebase --continue
 
 > **Note:** During rebase, "ours" refers to the working branch and "theirs" refers to main. This is the opposite of the merge perspective.
 
+### Automatic Conflict Hygiene: rerere + zdiff3
+
+DGS automatically sets three git config values in every DGS-managed repo:
+
+| Key | Value | What it does |
+|-----|-------|--------------|
+| `rerere.enabled` | `true` | Records how you resolved each conflict so git can replay it if the same conflict recurs |
+| `rerere.autoupdate` | `true` | Stages a replayed resolution automatically, without an extra `git add` |
+| `merge.conflictStyle` | `zdiff3` | Adds a merge-base section (`\|\|\|\|\|\|\|`) inside conflict markers, alongside the usual "ours"/"theirs" sections |
+
+**When it's applied.** These settings are written at two moments: when a repo is registered (`/dgs:add-repo`), right after the `.git/` validation, and on every worktree creation, right after a successful `git worktree add`. Repo-local git config is shared by a repo's main checkout and all of its worktrees, so a single application at registration time already covers every worktree cut from that repo later.
+
+**Scope: repo-local, never global.** DGS writes these with a plain `git config <key> <value>` — it never passes `--global` or `--system`. Your global git config is never touched; this is a locked design constraint, not an oversight.
+
+**Warn-only.** If setting any of the three keys fails, DGS prints a warning to stderr and continues — it never aborts repo registration or worktree creation over a config nicety.
+
+**Why it matters.** Rebase-before-merge (DGS's default completion strategy) replays your commits onto the target branch one at a time, so the same conflict can recur across several commits in the same rebase; `rerere` remembers the resolution and replays it automatically instead of asking you to redo it. `zdiff3`'s merge-base section gives both you and DGS's conflict-agent three-way evidence — what the file looked like before either side changed it — which is what the classification logic in [Conflict Handling](#conflict-handling) above relies on to distinguish a real conflict from two sides doing the same thing.
+
+See [Configuration Reference](CONFIGURATION-GUIDE.md#git-settings) for how to inspect or opt out of these settings.
+
 ---
 
 ## Completion Modes: Merge vs PR
