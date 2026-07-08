@@ -205,6 +205,7 @@ Usage: `/dgs:plan-milestone-gaps --auto` (non-interactive gap closure)
 | `/dgs:quick` | Ad-hoc task with DGS guarantees | Bug fixes, small features, config changes |
 | `/dgs:debug [desc]` | Systematic debugging with persistent state | When something breaks |
 | `/dgs:code-review [scope\|PR URL]` | On-demand multi-pass code review — auto-fix in local mode, comment-only on PRs | Before complete-quick/complete-milestone, four-eyes PR review, after manual/skip-DGS edits |
+| `/dgs:adversarial-review [scope]` | Claim-refutation review — refuter agents execute code to refute done-ness claims; verdicts with evidence, no auto-fix | Final trust gate after audit-phase and code-review, before complete-quick/complete-milestone |
 | `/dgs:add-todo [desc]` | Capture an idea for later | Think of something during a session |
 | `/dgs:check-todos [area]` | List pending todos, optionally filtered by area | Review captured ideas |
 | `/dgs:cleanup` | Archive completed quick task directories | Reduce clutter in quick/ directory |
@@ -272,6 +273,22 @@ Usage: `/dgs:code-review src/lib/foo.cjs` (review one file)
 Usage: `/dgs:code-review https://github.com/owner/repo/pull/123` (PR review mode)
 Usage: `/dgs:code-review branch --repo my-api` (pick a registered repo explicitly)
 
+**`/dgs:adversarial-review [<phase>|<quick-slug>|milestone] [--repo <name>]`**
+Claim-refutation review — the final trust gate. Distinct from `audit-phase` (goal-backward structural: does what the plan promised exist and wire up) and `/dgs:code-review` (diff-inward line-level: is the code correct/clean/to-standard) — this asks whether the CLAIM that something works is actually true, by executing code rather than reading it.
+
+- Claim sources: phase SUMMARYs, plan `must_haves`/UAT acceptance criteria, VERIFICATION.md conclusions, and commit messages (plus a named extension point for the assumption ledger's `ASSUMED:` entries, when present)
+- Dispatches parallel Bash-capable refuter agents rooted at `REVIEW_REPO` with the mandate "run it, don't read it" — execute the test, curl the endpoint, query the table, invoke the CLI with the claimed input
+- Verdicts: CONFIRMED (executed evidence), REFUTED (executed evidence of failure, re-verified by the orchestrator before being accepted), UNVERIFIABLE (no executable test, or a non-reproducing refutation)
+- No auto-fix: REFUTED claims are routed to `/dgs:quick <description>` (contained) or a gap phase (`/dgs:plan-phase --gaps` / `/dgs:add-todo`, systemic) — never fixed inline
+- Outputs: writes `ADVERSARIAL-REVIEW-<timestamp>.md` at the planning root and logs an Adversarial Reviews row + Last activity in STATE.md
+- `--repo <name>`: pick a registered repo explicitly
+
+Usage: `/dgs:adversarial-review` (default: most recently completed phase)
+Usage: `/dgs:adversarial-review 04` (a specific phase)
+Usage: `/dgs:adversarial-review milestone` (all completed phases in the milestone)
+Usage: `/dgs:adversarial-review 260704-btz` (a quick slug)
+Usage: `/dgs:adversarial-review 04 --repo my-api` (pick a registered repo explicitly)
+
 ### Testing & Dependency Scanning
 
 | Command | Purpose | When to Use |
@@ -317,6 +334,43 @@ Usage:
 /dgs:package-scan --json                       # emit JSON output
 /dgs:package-scan --threshold critical --repo worker --no-include-dev-deps
 ```
+
+### Artifact Graph
+
+| Command | Purpose | When to Use |
+|---------|---------|-------------|
+| `/dgs:query "<question>"` | Natural-language question answered as a read-only SELECT over the SQLite artifact index | "Which ideas are pending?", tracing idea → spec → milestone → phases |
+| `/dgs:integrity` | Report dangling links, orphaned artifacts, and broken milestone references (read-only) | Before release, in CI / a pre-push hook, or on demand |
+
+#### Artifact Graph Details
+
+**`/dgs:query "<question>" [--sql] [--limit N]`**
+Ask a natural-language question of the artifact graph. Read-only NL→SQL over the SQLite index.
+
+- Translation runs entirely in your local session — no new external model or telemetry
+- Produces exactly one read-only `SELECT`, executed through an engine-level safety guard: SELECT + safe-PRAGMA whitelist, injected `LIMIT`, a 5s statement interrupt, and parameter binding. A non-SELECT/DDL query is rejected fail-closed with the offending SQL shown
+- Results render in the DGS list/progress style with an always-on truncation footer; supports conversational follow-up refinement
+- Answers reverse-link and full-chain traceability questions (what references idea N; idea → spec → milestone → phases)
+- Backed by `dgs-tools query {schema,sql,trace,reverse-links}` — the command never opens the DB directly
+- `--sql`: show the generated query. `--limit N`: cap the row count
+- Config gate: when `query.enabled` is `false` the SQL is generated and shown but not auto-executed (headless/CLI-only opt-out — see [Configuration Reference](CONFIGURATION-GUIDE.md#query))
+- Degrades gracefully: when the SQLite index is absent it prints an info line instead of failing
+
+Usage: `/dgs:query "which ideas are still pending?"`
+Usage: `/dgs:query "phases in milestone v28.0" --sql` (show the generated SQL)
+Usage: `/dgs:query "specs referencing idea 12" --limit 20`
+
+**`/dgs:integrity [--quiet]`**
+Report artifact-graph integrity problems, grouped by class, with per-class and total counts. A clean graph prints `✓ no integrity issues`.
+
+- Classes: dangling `id-ref`/link targets, orphaned artifacts, broken `milestone` references
+- Strictly read-only; target existence is decided through the virtual-aware resolver, so virtual targets (`quick`, `fast`) are never false-flagged while a `milestone` that resolves to nothing IS reported
+- Exits nonzero when any finding exists (CI / pre-push-hook ready). Deliberately NOT auto-wired into DGS's own commit gate in v28.0 (deferred)
+- `--quiet`: summary counts only
+- When the SQLite index is absent it degrades to a filesystem fallback (dangling + broken-milestone)
+
+Usage: `/dgs:integrity` (full grouped report)
+Usage: `/dgs:integrity --quiet` (summary counts only)
 
 ### Ideas & Specs
 

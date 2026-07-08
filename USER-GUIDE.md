@@ -22,6 +22,7 @@ Detailed reference for specific topics lives in dedicated sub-documents:
 - [Workflow Diagrams](#workflow-diagrams)
 - [Context Tiers](#context-tiers)
 - [Usage Examples](#usage-examples)
+- [Querying the Artifact Graph](#querying-the-artifact-graph)
 - [Troubleshooting](#troubleshooting)
 - [Recovery Quick Reference](#recovery-quick-reference)
 
@@ -520,6 +521,14 @@ claude --dangerously-skip-permissions
 
 See [Command Reference](COMMAND-REFERENCE.md#brownfield--utilities-details) for the full scope, mode, and output details.
 
+### Claim-Refutation Review
+
+`/dgs:adversarial-review` is the final trust gate, run after `/dgs:code-review`: canonical order is audit-phase → code-review → adversarial-review. Where code-review asks "is this code correct?", adversarial-review asks "is the CLAIM that this works actually true?" — it attacks the claims of the finished post-fix artifact by executing code (running tests, curling endpoints, invoking the CLI) rather than reading source. Refuted claims route to `/dgs:quick` or a gap phase rather than being fixed inline.
+
+```bash
+/dgs:adversarial-review    # final trust gate — refute the green before completing
+```
+
 ### Speed vs Quality Presets
 
 | Scenario | Mode | Depth | Profile | Research | Plan Check | Verifier |
@@ -537,6 +546,35 @@ See [Command Reference](COMMAND-REFERENCE.md#brownfield--utilities-details) for 
 # or
 /dgs:remove-phase 7         # Descope phase 7 and renumber
 ```
+
+---
+
+## Querying the Artifact Graph
+
+DGS maintains a SQLite **artifact index** (`node:sqlite`) built from the frontmatter of every planning artifact plus a `links` graph. It is a rebuildable cache, never the source of truth: it auto-builds and reconciles itself, and every consumer falls back byte-identically to the filesystem when the index is absent, stale, or unsupported (Node < 22.13). No command ever hard-fails because of it — it transparently speeds up existing consumers like `/dgs:progress`, `/dgs:list-ideas`, and `/dgs:list-jobs` with identical output.
+
+Two commands expose the index directly:
+
+### Ask a question — `/dgs:query`
+
+```
+/dgs:query "which ideas are still pending?"
+/dgs:query "what phases does milestone v28.0 have?" --sql
+/dgs:query "specs that reference idea 12" --limit 20
+```
+
+Your natural-language question is translated — entirely in your local session, with no external model or telemetry — into a single read-only `SELECT`, executed through an engine-level safety guard (SELECT + safe-PRAGMA only, injected `LIMIT`, a 5s statement interrupt, parameter binding), and rendered in the familiar DGS list/progress style with a truncation footer. A non-SELECT or DDL query is rejected fail-closed with the offending SQL shown. Pass `--sql` to see the generated query, `--limit N` to cap rows, and ask follow-up questions to refine conversationally. It also answers reverse-link and full-chain traceability questions (what references idea N; idea → spec → milestone → phases).
+
+When `query.enabled` is set to `false`, `/dgs:query` still generates and shows the SQL but does not auto-execute it — useful for headless or CLI-only use. See [Configuration Reference](CONFIGURATION-GUIDE.md#query) for the toggle.
+
+### Check graph integrity — `/dgs:integrity`
+
+```
+/dgs:integrity
+/dgs:integrity --quiet
+```
+
+Reports integrity problems grouped by class — dangling `id-ref`/link targets, orphaned artifacts, and broken `milestone` references — with per-class and total counts. A clean graph prints `✓ no integrity issues`. It is strictly read-only and virtual-aware: virtual targets (`quick`, `fast`) are never false-flagged, while a `milestone` that genuinely resolves to nothing is reported. It exits nonzero when any finding exists, so it is ready to wire into CI or a pre-push hook (it is deliberately not part of DGS's own commit gate in v28.0). Use `--quiet` for summary counts only. When the index is absent it degrades to a filesystem fallback covering dangling and broken-milestone checks.
 
 ---
 

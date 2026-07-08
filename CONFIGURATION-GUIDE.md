@@ -38,6 +38,9 @@ Review API keys are stored separately in `review-keys.json` (see [Cross-LLM Revi
     "completion_mode": "merge",
     "sync_push": "off",
     "sync_pull": "off"
+  },
+  "query": {
+    "enabled": true
   }
 }
 ```
@@ -103,6 +106,19 @@ dgs-tools config-local-set testing.packages.snyk_token <your-token>
 ```
 
 **Tool installation** — see [`references/package-scan-config.md`](../deliver-great-systems/references/package-scan-config.md#tool-installation) for install commands per tool (Snyk, OSV-Scanner, pip-audit, govulncheck, bundler-audit).
+
+### Query
+
+Configuration for `/dgs:query` (introduced in v28.0).
+
+| Setting | Options | Default | What it Controls |
+|---------|---------|---------|------------------|
+| `query.enabled` | `true`, `false` | `true` | Gates `/dgs:query` **auto-execution** only. When `false`, `/dgs:query` still generates and shows the SQL but does not auto-run it — a headless/CLI-only opt-out. Does not affect any other command; the underlying SQLite artifact index remains a rebuildable cache that all consumers fall back to the filesystem for when it is absent. |
+
+Set via:
+```
+dgs-tools config-set query.enabled false
+```
 
 ### Cross-LLM Review
 
