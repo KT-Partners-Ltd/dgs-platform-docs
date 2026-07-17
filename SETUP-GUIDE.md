@@ -2,6 +2,8 @@
 
 > See also: [USER-GUIDE.md](USER-GUIDE.md) for workflow overview and usage examples.
 
+> New to DGS? Start with [GETTING-STARTED.md](GETTING-STARTED.md) — this guide covers multi-repo setup and internals.
+
 ## Multi-Repo Setup
 
 DGS supports managing multiple source code repos from a single planning repo. All repos sit as siblings in the same parent directory:
@@ -9,11 +11,11 @@ DGS supports managing multiple source code repos from a single planning repo. Al
 ```
 ~/projects/
 ├── my-product/              <- planning repo (run DGS commands here)
-│   └── .planning/
-│       ├── REPOS.md         <- repo registry
-│       ├── PROJECTS.md
-│       ├── config.json
-│       └── phases/
+│   ├── REPOS.md             <- repo registry
+│   ├── PROJECTS.md
+│   ├── config.json
+│   ├── projects/<slug>/     <- per-project (PROJECT.md, ROADMAP.md, STATE.md, phases/ ...)
+│   └── .planning/.index/    <- rebuildable SQLite index (gitignored)
 ├── api-service/             <- source repo (sibling)
 ├── web-app/                 <- source repo (sibling)
 └── mobile-app/              <- source repo (sibling)
@@ -24,7 +26,7 @@ DGS supports managing multiple source code repos from a single planning repo. Al
 ```bash
 cd ~/projects
 mkdir my-product && cd my-product
-/dgs:init-product                    # creates .planning/ structure with recommended defaults
+/dgs:init-product                    # creates the planning-repo-root structure with recommended defaults
 /dgs:add-repo api-service            # registers ../api-service
 /dgs:add-repo web-app                # registers ../web-app
 /dgs:add-repo mobile-app             # registers ../mobile-app
@@ -34,7 +36,7 @@ mkdir my-product && cd my-product
 
 **How it works:**
 - All DGS commands run from the planning repo (`my-product/`)
-- Repos are registered in `.planning/REPOS.md` with `../repo-name` paths
+- Repos are registered in `REPOS.md` (at the planning-repo root) with `../repo-name` paths
 - `/dgs:add-repo` defaults to `../` paths and validates the sibling directory exists
 - Plans reference repos by name in `<repos>` tags; file paths are repo-relative
 - Execution resolves paths via REPOS.md lookup at runtime
@@ -100,7 +102,7 @@ For monorepos: the worktree is at the repo level. Your setup script handles inte
 After running `/dgs:map-codebase` with two registered repos (`api-service` and `web-app`):
 
 ```
-.planning/codebase/
+codebase/
 ├── api-service/                # Per-repo maps
 │   ├── STACK.md
 │   ├── ARCHITECTURE.md
@@ -156,11 +158,12 @@ All generated codebase files (per-repo and unified) are scanned for accidentally
 
 ## Product File Structure
 
-For reference, here is what DGS creates. Product-level files are shared across all projects. Each project gets its own subdirectory under `.planning/`.
+For reference, here is what DGS creates. Product-level files are shared across all projects. Each project gets its own subdirectory at the planning-repo root.
 
 ```
-.planning/                          # PRODUCT LEVEL
-  dgs.config.json                   # Product-wide configuration (shared across projects)
+<planning-repo-root>/               # PRODUCT LEVEL (the git planning repo root)
+  .planning/.index/                 # Rebuildable SQLite index (gitignored — the ONLY thing under .planning/)
+  config.json                       # Product-wide configuration (shared across projects)
   review-keys.json                  # Review API keys (gitignored, edit directly)
   PROJECTS.md                       # Auto-generated project registry
   REPOS.md                          # Multi-repo registry (../repo-name paths)

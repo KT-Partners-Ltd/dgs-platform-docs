@@ -2,6 +2,7 @@
 Welcome to the official guides for the DGS Platform by KT Partners.
 
 ### Available Guides:
+* [Getting Started](./GETTING-STARTED.md) — Your first project, the core plan → execute → ship loop, and the pre-ship gates. Start here.
 * [User Guide](./USER-GUIDE.md) — Workflow overview, context tiers, usage examples, and troubleshooting.
 * [Command Reference](./COMMAND-REFERENCE.md) — All `/dgs:*` commands with flags, usage, and hierarchy.
 * [Configuration Guide](./CONFIGURATION-GUIDE.md) — Settings, workflow toggles, cross-LLM review, and git config.

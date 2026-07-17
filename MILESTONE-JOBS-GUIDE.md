@@ -82,7 +82,7 @@ The command:
 1. Reads ROADMAP.md and determines each phase's state (unplanned, planned, or complete)
 2. Generates a step sequence — skipping completed phases, adding discuss/plan/execute/verify for unplanned phases, and execute/verify for already-planned phases
 3. Shows the full step list for your approval before writing
-4. Writes the job file to `.planning/jobs/pending/milestone-{version}.md`
+4. Writes the job file to `jobs/pending/milestone-{version}.md`
 
 The `--no-check` flag omits the `audit-milestone` step from the generated job, useful when you want to run phases without the final audit cycle. Note: `complete-milestone` is never auto-run in jobs — it requires manual intervention (branch review, tag push, merge conflict resolution), so you always run it manually after the job completes.
 
@@ -171,7 +171,7 @@ Job files are Markdown documents with `[x]`/`[ ]`/`[!]` checkboxes:
 - **Steps:** Each step is a checkbox line with the DGS command to execute
 - **Timestamps:** Added alongside steps as they complete
 - **Error summaries:** Appended for failed steps
-- **Storage:** Files move between `.planning/jobs/pending/`, `in-progress/`, and `completed/` directories, which are auto-created when needed
+- **Storage:** Files move between `jobs/pending/`, `jobs/in-progress/`, and `jobs/completed/` directories, which are auto-created when needed
 
 ### Job Summaries
 

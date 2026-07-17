@@ -2,11 +2,11 @@
 
 > See also: [USER-GUIDE.md](USER-GUIDE.md) for workflow overview and usage examples.
 
-DGS stores product-level settings in `dgs.config.json` (in your planning root). This file is shared across all projects in the product. Recommended defaults are applied automatically by `/dgs:init-product`. Update any setting later with `/dgs:settings`.
+DGS stores product-level settings in `config.json` (in your planning root). This file is shared across all projects in the product. Recommended defaults are applied automatically by `/dgs:init-product`. Update any setting later with `/dgs:settings`.
 
 Review API keys are stored separately in `review-keys.json` (see [Cross-LLM Review](#cross-llm-review) below).
 
-### Full dgs.config.json Schema
+### Full config.json Schema
 
 ```json
 {
@@ -165,7 +165,7 @@ DGS uses git worktrees for all isolation. Each milestone and product-level quick
 
 **Sync cadence is fixed, not configurable.** Which workflows sync — and whether they pull, push, or both — is a built-in classification baked into the sync engine (every DGS workflow is classified as pull+push, push-only, pull-only, or no-sync; e.g. `execute-phase` and `plan-phase` pull and push, `add-idea` pushes only, `progress` pulls only, `help` never syncs). The `git.sync_push` / `git.sync_pull` settings control only the *mode* at those built-in cadence points: `off` skips the sync, `prompt` asks first, `auto` syncs silently. You cannot change which workflows sync, only how the sync behaves when a workflow reaches its cadence point.
 
-**Automatic repo-local git settings (conflict hygiene).** These are NOT `dgs.config.json` keys — they are plain git settings DGS writes directly into each managed repo's local git config:
+**Automatic repo-local git settings (conflict hygiene).** These are NOT `config.json` keys — they are plain git settings DGS writes directly into each managed repo's local git config:
 
 | Key | Value | When applied | What it does |
 |-----|-------|---------------|---------------|

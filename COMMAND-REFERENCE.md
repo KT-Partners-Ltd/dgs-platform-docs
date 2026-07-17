@@ -205,7 +205,8 @@ Usage: `/dgs:plan-milestone-gaps --auto` (non-interactive gap closure)
 | `/dgs:quick` | Ad-hoc task with DGS guarantees | Bug fixes, small features, config changes |
 | `/dgs:debug [desc]` | Systematic debugging with persistent state | When something breaks |
 | `/dgs:code-review [scope\|PR URL]` | On-demand multi-pass code review — auto-fix in local mode, comment-only on PRs | Before complete-quick/complete-milestone, four-eyes PR review, after manual/skip-DGS edits |
-| `/dgs:adversarial-review [scope]` | Claim-refutation review — refuter agents execute code to refute done-ness claims; verdicts with evidence, no auto-fix | Final trust gate after audit-phase and code-review, before complete-quick/complete-milestone |
+| `/dgs:security-review [scope\|PR URL]` | Threat-model-oriented review — reads the diff as new attack surface (trust boundaries, newly-reachable sinks, secrets); reports and routes, never auto-fixes | After code-review settles the diff, when the change plausibly moved attack surface — auth, network, deserialization, secrets |
+| `/dgs:adversarial-review [scope]` | Claim-refutation review — refuter agents execute code to refute done-ness claims; verdicts with evidence, no auto-fix | Final trust gate after audit-phase, code-review and security-review, before complete-quick/complete-milestone |
 | `/dgs:add-todo [desc]` | Capture an idea for later | Think of something during a session |
 | `/dgs:check-todos [area]` | List pending todos, optionally filtered by area | Review captured ideas |
 | `/dgs:cleanup` | Archive completed quick task directories | Reduce clutter in quick/ directory |
@@ -273,8 +274,27 @@ Usage: `/dgs:code-review src/lib/foo.cjs` (review one file)
 Usage: `/dgs:code-review https://github.com/owner/repo/pull/123` (PR review mode)
 Usage: `/dgs:code-review branch --repo my-api` (pick a registered repo explicitly)
 
+**`/dgs:security-review [staged|unstaged|branch|<PR URL>] [--repo <name>] [--base <branch>]`**
+Change-scoped security review — the security lens in the gate chain. Where `/dgs:code-review` reads the diff inward for line-level correctness, this reads it outward as *new attack surface*: what does the change let an attacker reach that they could not reach before?
+
+- Stance: a mandatory, written-out reasoning pass — boundary map → reachability delta → sink trace — precedes any finding. Every finding cites the observation it came from and names the entry point, what an untrusted caller can now reach, and the sink it lands in. A candidate that cannot fill all three parts is not a lens finding
+- "No attack-surface change" is a first-class, correct outcome — the command deliberately keeps its noise floor low rather than padding with generic line-level nags
+- Read-only by construction: the security subagent is granted only `Read`/`Grep`/`Glob`, and a source-change guard proves nothing but the report and STATE.md changed
+- Never auto-fixes: findings are presented as a routing table (`/dgs:quick` for contained, a gap phase or `/dgs:add-todo` for systemic) and left for you to action. Non-blocking by convention — it never hard-blocks a completion
+- A fail-closed secret scan refuses to produce a report containing a raw secret, with no bypass
+- Outputs: writes `SECURITY-REVIEW-<timestamp>.md` at the planning root and logs a Security Reviews row + Last activity in STATE.md
+- Two-axis severity: every finding carries `severity` — impact *if the sink is reached*, ordered `info < low < medium < high < critical` — and, independently, `reachability_confidence` (`confirmed` | `probable` | `unproven`), i.e. whether the untrusted path was actually demonstrated from the diff. The axes are deliberately separate: a catastrophic-but-unproven sink keeps its high `severity` and is flagged `reachability_confidence: unproven` rather than being quietly downgraded — so you triage on impact and chase proof as a distinct step
+- The lens pins `model: opus`, so the same diff yields the same verdicts regardless of which model you're running the command from (recall and severity anchoring were measured model-sensitive)
+- Default scope is `branch` (settled, post-fix state) — unlike code-review's work-in-progress default
+
+Usage: `/dgs:security-review` (default: branch scope)
+Usage: `/dgs:security-review staged` (review what's staged)
+Usage: `/dgs:security-review branch --repo my-api` (pick a registered repo explicitly)
+Usage: `/dgs:security-review branch --base develop` (override the base branch)
+Usage: `/dgs:security-review https://github.com/owner/repo/pull/123` (review a PR, fork-safe and read-only)
+
 **`/dgs:adversarial-review [<phase>|<quick-slug>|milestone] [--repo <name>]`**
-Claim-refutation review — the final trust gate. Distinct from `audit-phase` (goal-backward structural: does what the plan promised exist and wire up) and `/dgs:code-review` (diff-inward line-level: is the code correct/clean/to-standard) — this asks whether the CLAIM that something works is actually true, by executing code rather than reading it.
+Claim-refutation review — the final trust gate. Distinct from `audit-phase` (goal-backward structural: does what the plan promised exist and wire up), `/dgs:code-review` (diff-inward line-level: is the code correct/clean/to-standard), and `/dgs:security-review` (trust-boundary-outward: what new attack surface does the diff introduce) — this asks whether the CLAIM that something works is actually true, by executing code rather than reading it.
 
 - Claim sources: phase SUMMARYs, plan `must_haves`/UAT acceptance criteria, VERIFICATION.md conclusions, and commit messages (plus a named extension point for the assumption ledger's `ASSUMED:` entries, when present)
 - Dispatches parallel Bash-capable refuter agents rooted at `REVIEW_REPO` with the mandate "run it, don't read it" — execute the test, curl the endpoint, query the table, invoke the CLI with the claimed input
@@ -432,7 +452,7 @@ Research an idea's feasibility and technical landscape via subagent.
 
 - Investigates five adaptive dimensions: web search, codebase analysis, landscape survey, approach identification, and feasibility assessment
 - For multi-repo projects, research is partitioned by repo with separate sections
-- Creates a structured research document at `.planning/docs/ideas/{slug}-research.md` with frontmatter (type, idea_id, idea_title, date, repos_analysed)
+- Creates a structured research document at `docs/ideas/{slug}-research.md` with frontmatter (type, idea_id, idea_title, date, repos_analysed)
 - Appends a Research Log entry to the idea file with: Summary, Document link, Key Finding, and Recommendation
 - Can be run multiple times -- each run appends a new Research Log entry and updates the research document
 - Both the research document and updated idea file are committed together
@@ -499,7 +519,7 @@ Supported file types: PDF, markdown, and images.
 
 3. When you save, DGS creates the spec with `draft` status, copies the original document into the spec's attachment directory, and commits everything in a single atomic git commit.
 
-If your project has codebase maps (`.planning/codebase/`) or product docs (`.planning/docs/product/`), DGS loads them as context during conversion. This means the Implementation Notes section references real modules and patterns from your codebase rather than generic placeholders.
+If your project has codebase maps (`codebase/`) or product docs (`docs/product/`), DGS loads them as context during conversion. This means the Implementation Notes section references real modules and patterns from your codebase rather than generic placeholders.
 
 Usage: `/dgs:import-spec ./mobile-app-redesign.pdf`
 Usage: `/dgs:import-spec ./api-overhaul.md --ideas 3 7`
@@ -644,8 +664,8 @@ Usage: `/dgs:search authentication --ideas-only` (search only ideas)
 Usage: `/dgs:search review --include-rejected --tags api` (broad search with filters)
 
 **Product docs as context:** Documents added with `--scope product` are automatically loaded as context by several workflows:
-- **`/dgs:write-spec`** and **`/dgs:plan-phase`** load all markdown files from `.planning/docs/product/`
-- **`/dgs:new-milestone`** loads `ARCHITECTURE.md` and `PRODUCT-SUMMARY.md` from `.planning/docs/product/` (if they exist) to inform research and roadmap creation
+- **`/dgs:write-spec`** and **`/dgs:plan-phase`** load all markdown files from `docs/product/`
+- **`/dgs:new-milestone`** loads `ARCHITECTURE.md` and `PRODUCT-SUMMARY.md` from `docs/product/` (if they exist) to inform research and roadmap creation
 
 This means uploading a target architecture or product summary via `/dgs:add-doc --scope product` will automatically inform spec drafting, phase planning, project initialization, and milestone creation.
 

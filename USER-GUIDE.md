@@ -1,6 +1,6 @@
 # DGS User Guide
 
-A detailed reference for workflows, troubleshooting, and configuration. For quick-start setup, see the [README](../README.md).
+A detailed reference for workflows, troubleshooting, and configuration. For a linear first-time walkthrough, see [GETTING-STARTED.md](GETTING-STARTED.md); for quick-start setup, see the [README](../README.md).
 
 ---
 
@@ -9,7 +9,7 @@ A detailed reference for workflows, troubleshooting, and configuration. For quic
 Detailed reference for specific topics lives in dedicated sub-documents:
 
 - **[Command Reference](COMMAND-REFERENCE.md)** -- Every DGS command with flags, usage examples, and detailed behavior
-- **[Configuration Guide](CONFIGURATION-GUIDE.md)** -- dgs.config.json schema, workflow toggles, cross-LLM review, conflict resolution
+- **[Configuration Guide](CONFIGURATION-GUIDE.md)** -- config.json schema, workflow toggles, cross-LLM review, conflict resolution
 - **[Milestone Jobs & Execution Lifecycle](MILESTONE-JOBS-GUIDE.md)** -- Quick workflows, milestone jobs, phase audit, model profiles
 - **[Setup Guide](SETUP-GUIDE.md)** -- Multi-repo setup, codebase mapping, product file structure
 - **[Multi-User Approach Guide](MULTI_USER_APPROACH_GUIDE.md)** -- Coordinating DGS across multiple developers, four-eyes completion governance
@@ -33,13 +33,13 @@ Detailed reference for specific topics lives in dedicated sub-documents:
 ### Full Product Lifecycle
 
 ```
-  ┌───────────────────────────────────────────────────────┐
-  │                  PRODUCT SETUP                        │
-  │  /dgs:init-product                                    │
-  │  Creates .planning/, REPOS.md, PROJECTS.md            │
-  │  /dgs:add-repo to register source repos               │
-  └────────────────────────┬──────────────────────────────┘
-                           │
+  ┌────────────────────────────────────────────────────────────────────────┐
+  │                             PRODUCT SETUP                              │
+  │  /dgs:init-product                                                     │
+  │  Creates config.json, REPOS.md, PROJECTS.md at the planning-repo root  │
+  │  /dgs:add-repo to register source repos                                │
+  └────────────────────────────────────┬───────────────────────────────────┘
+                                       │
           ┌────────────────▼────────────────┐
           │         IDEAS & SPECS           │
           │                                 │
@@ -344,7 +344,7 @@ For the machine-readable tier definitions parsed at runtime, see `references/con
 | `/dgs:check-todos [area]` | List pending todos |
 | `/dgs:cleanup` | Archive completed milestone directories |
 | `/dgs:complete-project` | Mark current project as completed |
-| `/dgs:health [--repair]` | Validate .planning/ integrity |
+| `/dgs:health [--repair]` | Validate planning-repo-root integrity |
 | `/dgs:init-product` | Initialize product structure |
 | `/dgs:list-docs` | List all supporting documents |
 | `/dgs:list-ideas [--tag TAG]` | View ideas by state |
@@ -521,9 +521,25 @@ claude --dangerously-skip-permissions
 
 See [Command Reference](COMMAND-REFERENCE.md#brownfield--utilities-details) for the full scope, mode, and output details.
 
+### Security Review
+
+`/dgs:security-review` is the security lens, run after `/dgs:code-review` has settled the diff. Where code-review reads the diff *inward* for line-level correctness, security-review reads it *outward* as **new attack surface**: what does this change let an attacker reach that they could not reach before — a moved trust boundary, a newly-reachable dangerous sink, a secret now flowing somewhere new?
+
+It reports and routes; it never edits source and never auto-fixes. Findings are non-blocking by convention — whether one should stop a completion is your call.
+
+Each finding is scored on two independent axes. **Severity** is how bad it is *if the vulnerable sink is actually reached* (`info` → `critical`); **`reachability_confidence`** (`confirmed`, `probable`, or `unproven`) is whether the lens could demonstrate that untrusted path from the diff itself. They are kept separate on purpose: an unproven-but-catastrophic sink keeps its high severity and is flagged `reachability_confidence: unproven` rather than being quietly downgraded — so you triage on impact first and confirm reachability as a second step. The lens pins `model: opus`, so its verdicts don't drift with whichever model you happen to invoke the command from.
+
+Recommended cadence is a **convention, not a trigger**: run it at end-of-milestone over the accumulated diff, or opt in on a phase or quick that touches security-sensitive surface (auth, network handlers, deserialization, secrets). Deliberately *not* every phase — a gate that always fires with nothing to say trains you to ignore it.
+
+```bash
+/dgs:security-review                  # default: branch scope, the settled change
+/dgs:security-review staged           # what's staged right now
+/dgs:security-review https://github.com/owner/repo/pull/123   # a PR, fork-safe and read-only
+```
+
 ### Claim-Refutation Review
 
-`/dgs:adversarial-review` is the final trust gate, run after `/dgs:code-review`: canonical order is audit-phase → code-review → adversarial-review. Where code-review asks "is this code correct?", adversarial-review asks "is the CLAIM that this works actually true?" — it attacks the claims of the finished post-fix artifact by executing code (running tests, curling endpoints, invoking the CLI) rather than reading source. Refuted claims route to `/dgs:quick` or a gap phase rather than being fixed inline.
+`/dgs:adversarial-review` is the final trust gate, run after `/dgs:code-review`: canonical order is audit-phase → code-review → security-review → adversarial-review. Where code-review asks "is this code correct?", adversarial-review asks "is the CLAIM that this works actually true?" — it attacks the claims of the finished post-fix artifact by executing code (running tests, curling endpoints, invoking the CLI) rather than reading source. Refuted claims route to `/dgs:quick` or a gap phase rather than being fixed inline.
 
 ```bash
 /dgs:adversarial-review    # final trust gate — refute the green before completing
