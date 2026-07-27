@@ -212,6 +212,10 @@ There are two ways to drive this step, both valid:
 See [USER-GUIDE.md](USER-GUIDE.md) and [COMMAND-REFERENCE.md](COMMAND-REFERENCE.md) for
 the full ideas → spec pipeline.
 
+If a line of work is bigger than a single idea — it'll spawn multiple ideas/todos and
+accumulate decisions over time — capture it as a **thread** instead with
+`/dgs:add-thread`. See [USER-GUIDE.md § Threads](USER-GUIDE.md#threads).
+
 ---
 
 ## 7. Build Your First Phase

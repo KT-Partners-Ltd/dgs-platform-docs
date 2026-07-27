@@ -301,6 +301,23 @@ These are behavioral guarantees proven by multi-process contention tests (below)
 
 **What the tests prove.** Two fork-based harnesses back these claims with real multi-process races. `concurrency-race.test.cjs` proves the substrate primitives: 200 concurrent config writes across two processes lose zero entries, concurrent ID draws contain zero duplicates, exactly one milestone entry survives a creation race, concurrent planning-repo commits each contain only their own files, and the per-key stale thresholds hold (a live slow commit is not reclaimed; a leaked config sentinel is). `concurrency-caller-race.test.cjs` goes further and drives the **real command callers** — console binding, config-set, fast-PR record, the generic committer, milestone worktree creation, PR-record persistence — under two-process contention with no test-side retry wrapper, proving each caller surfaces contention as a failure (an explicit error or `contended: true` result) instead of false success or a silent drop.
 
+### The Planning-Tree Cleanliness Invariant
+
+The locking substrate above stops two writers from corrupting shared state *at the same instant*. A second, higher-level guarantee governs what each session is allowed to **leave behind** and what it is allowed to **block on**: the **planning-tree cleanliness invariant** (milestone v31.1). Because every console shares ONE planning-repo working tree — one `.git/index`, one branch — a session that leaves stray changes behind, or that blocks on changes it does not own, breaks a neighbour just as surely as a lost update would.
+
+Three definitions ground the invariant (copied verbatim from the milestone spec, INV-01):
+
+- **dirty** = tracked/untracked changes attributable to a session's operation, EXCLUDING gitignored machine-local files (`config.local.json`, the lock sentinel) and the operation's own not-yet-committed temp scratch.
+- **session yield** = the point a CLI invocation returns control.
+- **owned work** = paths under this session's active-context slug (`console_bindings` + `active_doc_bindings`).
+
+The invariant has two parts:
+
+- **Part 1 — no-dirt-left (the corruption face).** Every write command commits its planning-file mutations atomically — through the one sanctioned committer (`planningCommit` / `planningCommitAndPush`), path-limited under the `__planning_git__` mutex — and leaves the tree clean at session yield. It never leaves the tree dirty, and it never sweeps a peer's staged files (no bare `git add -A` followed by a whole-index `git commit`).
+- **Part 2 — own-work-only gates (the blocking face).** Every pre-flight cleanliness gate blocks only on dirt the CURRENT session **owns** (or on genuinely-unattributable dirt / real repo-state hazards) — never on another live console's foreign dirt. A gate that rejected on whole-tree dirt (an unscoped `git status --porcelain`) would block a peer for work it does not own — the blocking face of the same bug class.
+
+Every gate, hook, ID-allocator, and lock in the engine **references** the single authoritative statement in `references/planning-tree-cleanliness-invariant.md` rather than re-deriving it — that single-source referencing is what makes the guarantee enforceable instead of a matter of review vigilance. The invariant is enforced in CI by a mutation-verified static-scan guard test (`bin/lib/planning-commit-audit.test.cjs`), blocking on merge by construction. The long-operation lock and the config-flag/recovery surface documented below are the concrete mechanisms that enforce this invariant; they extend the substrate above rather than replacing it.
+
 ### Recovering a Stuck Run: the Execution Lock
 
 Separate from the sub-second sentinel mutexes above, DGS keeps a longer-lived **execution lock**: one executor per milestone worktree at a time. The lock record is `execution.executing.<slug> = { started_at, session_id }` in `config.local.json` (its own reads and writes run under `__config__`, so acquiring it is race-free). If a second executor tries to start against the same worktree while the lock is live, it is refused and told which session holds it.
@@ -321,6 +338,63 @@ Separate from the sub-second sentinel mutexes above, DGS keeps a longer-lived **
 |-------|-----------|----------------------|
 | Sentinel stale-reclaim (`__config__` / `__planning_git__`) | 5s / 60s | A leaked lock *file* from a crashed process; self-heals automatically |
 | Execution-lock staleness | 6 hours | A crashed *run*; auto-released on the next acquire, or freed manually with `release --force` |
+
+### Owner-Identified Long-Operation Lock (`lock_long_ops`)
+
+The two locks above cover *short* critical sections — a sub-second config write, a seconds-long commit. A few planning operations run much longer (a multi-second, occasionally multi-minute rebase) and must not be stolen from a live holder mid-operation. For those, DGS ships a third, flagged lock layer: an **owner-identified, heartbeat-aware long-operation lock**, enabled by `lock_long_ops` (default **OFF**). With the flag off, behaviour is byte-for-byte the existing short lock — this layer adds nothing until you opt in. The lock file is `.dgs-long-op-lock.json`, written next to `config.local.json` and gitignored.
+
+**Lock-file schema** (`version` is the schema version, currently `1`):
+
+| Field | Meaning |
+|-------|---------|
+| `owner_session_id` | The session that holds the lock |
+| `owner_pid` | Holder's process id — **diagnostic only**, never the liveness signal |
+| `owner_host` | Holder's hostname |
+| `heartbeat_ts` | Timestamp the holder last stamped |
+| `op_type` | The operation being guarded (e.g. `rebase`) |
+| `version` | Lock schema version (currently `1`) |
+
+**Liveness — the heartbeat, not the PID.** An owner is *live* iff `now - heartbeat_ts <= HEARTBEAT_TTL` (default **90s**, `lock.heartbeat_ttl_ms`), and that heartbeat is read from the session heartbeat (`session-state.cjs` `execution.session_states[sessionId].ts`) — **never** decided by `owner_pid` or by the lock file's own `heartbeat_ts` field. A PID can be reused or belong to an unrelated process, so it is diagnostic only, never the liveness test.
+
+**The heartbeat refresher (correctness-critical).** Acquiring a long-op lock starts a **background, detached child process** that re-stamps the session heartbeat every `min(HEARTBEAT_TTL/3, 30s)` = **30s** at the default TTL, and stops on release. It MUST be a separate OS process, not a same-process timer: a synchronous multi-second git op blocks the parent's event loop, so an in-process timer could never fire to refresh the heartbeat mid-operation — which is exactly the window in which a live holder would otherwise look dead and be stolen during a long rebase.
+
+**The steal rule.** Acquire-by-steal happens ONLY when the owner is NOT live AND the lock age exceeds `STEAL_THRESHOLD` (default **120s** = HEARTBEAT_TTL + 30s, `lock.steal_threshold_ms`). A live owner is never stolen; a paused-but-live holder (a stall shorter than the TTL) survives. Both thresholds are config-overridable.
+
+**Short-commit vs long-op interaction.** The preserved short-commit fast path (the ordinary `planningCommit` / `commitInternal` route) does a NON-blocking owner check (`checkNoLiveLongOpConflict`): with the flag OFF it is zero added I/O; with the flag ON and no lock present it is one cheap `stat`; and if a **different live session** owns a long-op lock, the short commit **fails fast with `held_by`** (reason `long_op_held`) rather than stealing or blocking. A crashed owner does NOT block a short commit — recovery there is the steal rule or `dgs-tools lock clear --force`, not a short commit.
+
+**The `held_by` error format (LOCK-02).** A refusal carries a structured payload and a human string. The payload is:
+
+```
+held_by: { session_id, pid, host, last_heartbeat_age_s, op_type }
+```
+
+and the human string lets a person tell a live neighbour from a crashed holder at a glance:
+
+- live: `lock held by session <id> (last active 12s ago, op: rebase)`
+- crashed: `lock held by CRASHED session <id> (last active <n>s ago, op: <op_type>) — recover with: dgs-tools lock clear --force`
+
+This is a **third staleness layer**, longer and owner-identified, sitting above the two in the table just above: the sentinel stale-reclaim (5s / 60s) heals a leaked lock *file*, the execution-lock staleness (6h) heals a crashed *run*, and this layer keeps a genuinely-live long operation from being reclaimed — on the heartbeat's own timescale (90s live / 120s steal).
+
+### Config Flags, Rollback & Recovery
+
+The v31.1 cleanliness mechanisms each ship behind their own flag with a safe default, so any one can be turned off without touching the others — each is **independently revertible** (per-mechanism rollback).
+
+| Flag | Default (as built) | What it enables | Roll back by |
+|------|--------------------|-----------------|--------------|
+| `gates.console_scoped` | `true` (console-scoped gates ON) | The G1/G2/G3/G5 cleanliness gates block only on YOUR own work, not a peer console's dirt | set `gates.console_scoped false` → restores the global whole-tree gate |
+| `lock_long_ops` | `false` (OFF) | The owner-identified, heartbeat-aware long-operation lock above | leave off (the default) → the existing short-lock fast path |
+| `hook_ownership_mode` | `'B'` | The safety-net hook commits only its declared path allowlist | mode `'B'` IS the safe default; `'A'` (foreign-skip + counter) is the opt-in enhancement, gated behind a runtime console-binding deployment check |
+
+**"Scoped ON by default" is still fail-closed.** `gates.console_scoped` ships defaulting to `true` (scoped on / opt-OUT), not to the global gate. Two facts keep that safe. First, on unresolved ownership — no session id, kill-switch off, a git failure, or an internal error — the gate helper (`isMyWorkClean`, in `work-clean.cjs`) safe-degrades to a **byte-identical global whole-tree gate** (verdict `degraded-global`, fail-closed): if it cannot prove the dirt is *not* yours, it blocks on everything. Second, genuine repo-state hazards — an in-progress merge / rebase / cherry-pick, or a detached HEAD — abort **unconditionally**, scoped or not. So the scoped default narrows blocking to your own work only when ownership is provable, and falls back to blocking-on-everything whenever it is not.
+
+**Manual recovery for a poisoned long-op lock.** If a long-op lock's holder crashed — its heartbeat aged out but its `.dgs-long-op-lock.json` sentinel lingers — recover it explicitly:
+
+- `dgs-tools lock status [--json]` — reports the current long-op lock holder, or `No long-op lock held.`
+- `dgs-tools lock clear --force` — the human-confirmed recovery for a genuinely poisoned lock. Note that `dgs-tools lock clear` WITHOUT `--force` refuses a **LIVE** lock, printing the human `held_by` string plus the exact remediation line — so a live neighbour is never cleared by accident.
+
+**Security (SEC-1).** The session/owner fields (`owner_session_id`, `owner_pid`, `owner_host`) are local cooperative trust signals only — they are NOT an authorization boundary, and nothing gates access control on them. They exist to attribute and diagnose, not to authenticate.
+
+**Supported platforms.** This layer assumes a local POSIX filesystem (macOS / Linux) where `O_EXCL` file creation is atomic. NFS and Windows `O_EXCL` semantics are out of scope for this milestone.
 
 ---
 

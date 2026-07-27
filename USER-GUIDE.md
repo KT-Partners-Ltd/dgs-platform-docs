@@ -23,6 +23,7 @@ Detailed reference for specific topics lives in dedicated sub-documents:
 - [Context Tiers](#context-tiers)
 - [Usage Examples](#usage-examples)
 - [Querying the Artifact Graph](#querying-the-artifact-graph)
+- [Threads](#threads)
 - [Troubleshooting](#troubleshooting)
 - [Recovery Quick Reference](#recovery-quick-reference)
 
@@ -591,6 +592,60 @@ When `query.enabled` is set to `false`, `/dgs:query` still generates and shows t
 ```
 
 Reports integrity problems grouped by class — dangling `id-ref`/link targets, orphaned artifacts, and broken `milestone` references — with per-class and total counts. A clean graph prints `✓ no integrity issues`. It is strictly read-only and virtual-aware: virtual targets (`quick`, `fast`) are never false-flagged, while a `milestone` that genuinely resolves to nothing is reported. It exits nonzero when any finding exists, so it is ready to wire into CI or a pre-push hook (it is deliberately not part of DGS's own commit gate in v28.0). Use `--quiet` for summary counts only. When the index is absent it degrades to a filesystem fallback covering dangling and broken-milestone checks.
+
+---
+
+## Threads
+
+A **thread** is an organizing topic ABOVE ideas — a committed, team-visible, indexed home for a line of work that generates ideas and todos and accumulates decisions across sessions and teammates. Where an idea is a single build-bound capture, a thread never itself graduates to a spec or phase; its output IS the ideas/todos it spawns, plus a decisions ledger that nothing else in DGS records.
+
+```
+/dgs:add-thread "Payments v2 rework"
+/dgs:list-threads
+/dgs:resume-thread payments-v2-rework
+/dgs:promote-idea 42                    # an existing idea grows into an anchoring thread
+/dgs:backfill-threads                   # retrofit threads onto an existing idea backlog
+```
+
+### Thread vs idea
+
+An idea is a single, disposable capture that develops linearly toward a spec (idea → discuss → research → spec). A thread OWNS a family of child ideas and todos and persists as long as the line of work does — it is the topic, not a single unit of work. Use `/dgs:promote-idea` when an idea turns out to be the anchor of an ongoing effort rather than a one-shot capture.
+
+### Document anatomy
+
+Each thread file (`threads/<id>.md`) has five sections: **Goal**, **Context**, **Decisions Ledger**, **Next Steps**, **Log**.
+
+- **Goal** and **Next Steps** are steward prose — seeded empty at create, and rewritten only by `thread compact`.
+- **Context** is normally an append-only entry stream (each `append-context` call adds an attributed, UTC-timestamped entry, oldest first) — but, like Goal and Next Steps, it CAN be consolidated into clean prose by the guard-railed `thread compact --context <text>`, which overwrites the whole Context section with the given text.
+- **Decisions Ledger** and the activity **Log** are STRICTLY append-only. `compact` never touches them — no matter which of `--goal`/`--context`/`--next-steps` you pass, the Decisions Ledger and Log are left byte-identical. They are the one part of a thread that is pure history: nothing consolidates or rewrites them, ever.
+
+So the distinction is: Goal, Context, and Next Steps are all compact-consolidatable (Context is simply the one that is *also* a normal append target day-to-day); the Decisions Ledger and Log are append-only, full stop. No derived child state (idea/todo counts, statuses) is ever written into the thread file itself — that's always computed live from the index (see Lineage & roll-ups below).
+
+`thread compact` is a coordinate-first, solo-moment operation: it fetches first and refuses to run against un-pulled remote changes to the same thread file (override with `--force`), because a prose rewrite can't be safely unioned the way append-only entries can.
+
+### Identity & lifecycle
+
+A thread's `id` is a slug — immutable once created, auto-derived from the title when you don't pass `--id` explicitly (never an integer, unlike ideas/todos). Lifecycle is **open** → **dormant** → **closed** (and back to open on reopen). Appends to a closed thread are rejected outright — the file is left untouched — with a reopen hint pointing at `dgs-tools thread set-status <id> open`.
+
+### Lineage & roll-ups
+
+Every child idea or todo owns AT MOST ONE forward `thread` edge (cardinality one) — a thread itself owns no forward edge back to its children. Roll-up counts and status are always live reverse-index queries, never text stored in the thread file. `/dgs:check-todos --by-thread` groups todos under their owning thread (the engine-level `ideas list --by-thread` does the equivalent grouping for ideas); `/dgs:promote-idea` stamps an idea's edge onto a brand-new anchoring thread in one atomic commit, retaining the idea's own status and lifecycle unchanged.
+
+### Dashboard visibility
+
+Threads are browsable as a first-class type in the local DGS dashboard — the threads view lists each thread with its lifecycle status and its live child roll-up (idea/todo counts), the same reverse-junction counts `/dgs:list-threads` surfaces.
+
+### Similarity guard
+
+`/dgs:add-thread` runs a create-time similarity pass before minting a thread: a HIGH-confidence match against an existing thread blocks the create and offers append/link instead (override with `--force-new` to mint a distinct thread anyway); a HIGH match against a CLOSED thread routes you to reopen it instead of silently forking a duplicate. A MEDIUM match is informational only — create proceeds with a non-blocking heads-up.
+
+### Resume across sessions
+
+`/dgs:resume-thread` reloads a thread's goal, decisions ledger, next steps, and open todos into the session — the lightweight thread-scale equivalent of `/dgs:resume-work`.
+
+### Multi-user convergence
+
+Threads are DGS's committed multi-user primitive — concurrent appends from multiple clones converge over git with no manual conflict surgery. See [Multi-User Approach Guide](MULTI_USER_APPROACH_GUIDE.md) for the mechanics.
 
 ---
 

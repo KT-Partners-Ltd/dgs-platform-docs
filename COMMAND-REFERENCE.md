@@ -621,6 +621,73 @@ Undo a previous consolidation by restoring source ideas to pending and deleting 
 Usage: `/dgs:undo-consolidation 5` (undo consolidation of idea #5)
 Usage: `/dgs:undo-consolidation` (interactive: select from consolidated ideas)
 
+### Threads
+
+| Command | Purpose | When to Use |
+|---------|---------|-------------|
+| `/dgs:add-thread [title]` | Create a thread — an organizing topic above ideas | Starting a line of work that will generate multiple ideas/todos and decisions over time |
+| `/dgs:list-threads` | Thread index: status + live child idea/todo roll-up per thread | Check what threads are open, dormant, or closed |
+| `/dgs:resume-thread [thread-id]` | Reload a thread's goal, decisions ledger, next steps, and open todos | Picking a thread back up in a new session |
+| `/dgs:promote-idea [idea-id]` | Promote an existing idea into the thread it anchors | An idea has grown into an ongoing topic that will spawn more ideas/todos |
+| `/dgs:backfill-threads` | Adopt threads onto an existing idea backlog via a review-gated dry-run sweep | Retrofitting threads onto ideas captured before threads existed |
+
+#### Threads Details
+
+**`/dgs:add-thread [title] [--id thread-slug] [--projects a,b]`**
+Create a single thread directly, parallel to `/dgs:add-idea`. Mints the thread doc, seeds an empty Goal + Next Steps, and records a create Log entry — all in ONE commit. Create-only: this command runs no dedup pass itself — the create-time similarity/anti-fragmentation guard lives in the engine (see the Similarity guard note in [USER-GUIDE.md](USER-GUIDE.md#threads)).
+
+- `--id thread-slug`: explicit id (otherwise auto-derived from the title)
+- `--projects a,b`: tag the thread with project scope
+- Conversational title resolution when no title is given — never forces you to type the verb
+
+Usage: `/dgs:add-thread` (prompts for a title)
+Usage: `/dgs:add-thread "Payments v2 rework"` (title-only create; id auto-derived from the title)
+
+**`/dgs:list-threads [--status open|dormant|closed] [--projects a,b]`**
+A THREAD INDEX — rows are the threads themselves, each with its status and a live roll-up of child ideas + open todos (`{idea_count} ideas / {todo_count} todos`), in `updated` desc order. Distinct from `list-ideas --by-thread` (an ideas view grouped under thread headers).
+
+Usage: `/dgs:list-threads` (all threads)
+Usage: `/dgs:list-threads --status open` (only open threads)
+
+**`/dgs:resume-thread [thread-id] [--reopen]`**
+Load a thread's goal, decisions ledger, next steps, and open todos into the session. A dormant thread flips to open automatically (audited). A closed thread NEVER auto-flips — it prompts before reopening; a non-interactive invocation displays without flipping, and `--reopen` performs the audited flip.
+
+Usage: `/dgs:resume-thread payments-v2-rework`
+Usage: `/dgs:resume-thread payments-v2-rework --reopen` (reopen a closed thread)
+
+**`/dgs:promote-idea [idea-id] [--id thread-slug] [--relink]`**
+Promote an existing idea into the anchoring thread it represents. Creates the thread and stamps the source idea's single `links.thread` edge in ONE atomic commit. The idea is RETAINED additively as the thread's anchor child — its status is never changed, and it keeps its full lifecycle (idea → spec → phase is still possible).
+
+- `--id thread-slug`: explicit thread id (otherwise auto-derived from the idea's title)
+- `--relink`: required to move an idea that is already linked to a different thread (never auto-passed)
+
+Usage: `/dgs:promote-idea 42` (promote idea #42 into a new anchoring thread)
+
+**`/dgs:backfill-threads [--projects a,b]`**
+Adopt threads on an EXISTING pending-ideas backlog via a review-gated, revertible dry-run classification sweep. Runs a deterministic dry-run classification, renders cluster-parent proposals conversationally (proposed title, one-line goal, child count + titles, confidence, ambiguity flags), shows a separate "unsure" bucket and a reported-defects list, and lets you accept/reject in natural language with bulk-accept and edit-at-review. Claude then AI-synthesizes each accepted thread's Goal + Context and attributed Decisions Ledger, applies via the engine `thread sweep-apply`, and surfaces the one-command revert. Conversational review is the primary write surface — the raw `dgs-tools thread sweep` JSON stays available for non-interactive/automation consumers.
+
+Usage: `/dgs:backfill-threads` (dry-run sweep + conversational review)
+Usage: `/dgs:backfill-threads --projects api,web` (scope the sweep to specific projects)
+
+**`dgs-tools thread <verb>`**
+The full engine roster backing the five slash commands above (mirrors how `dgs-tools query …` backs `/dgs:query` in [Artifact Graph Details](#artifact-graph-details) and `dgs-tools reap-quicks` backs the reap sweep in [PR Completion & reap-quicks](#pr-completion--reap-quicks)):
+
+`create`, `list`, `append-note`, `append-context`, `append-decision`, `append-retraction`, `set-status`, `close`, `compact`, `link`, `promote`, `resume`, `sweep`, `sweep-apply`, `sweep-revert`
+
+- `list` and `sweep` are read-only — no git-identity gate, nothing written. Every other verb gates identity.
+- `append-note` / `append-context` / `append-decision` route an attributed, ISO-8601-UTC-timestamped entry to the Log / Context / Decisions Ledger section respectively; `append-retraction --target <addr> --reason <text>` appends a retraction entry rather than editing history.
+- `set-status <id> <open|dormant|closed>` and `close <id>` transition lifecycle.
+- `compact [--goal <text>] [--context <text>] [--next-steps <text>] [--force]` rewrites ONLY the steward-prose sections it's given — see the anatomy note in [USER-GUIDE.md](USER-GUIDE.md#threads): the Decisions Ledger and Log are never rewritten by `compact`, no matter which of the three flags are passed.
+- `link <id> <child-ref> [--type idea|todo] [--relink]`: stamp an existing idea or todo's single forward `links.thread` edge (default `--type idea`); `--relink` is required to move a child that already points at a different thread (cardinality-one — a child owns at most one thread edge).
+- `promote --idea <id> [--id thread-slug] [--relink]`: the engine call behind `/dgs:promote-idea`.
+- `sweep [--projects a,b]`: dry-run classify, creates nothing — the engine call behind `/dgs:backfill-threads`'s dry-run pass.
+- `sweep-apply --accept <file>`: apply a reviewed accept-spec JSON file.
+- `sweep-revert --run-id <id> [--force]`: revert a sweep-apply run by its run id; safe-by-default, `--force` overrides drift refusals.
+
+Thread `id` is an immutable, auto-derived SLUG (not an integer) — derived from the title via `slugifyThreadId` when `--id` is omitted. Lifecycle is `open` / `dormant` / `closed`; appends to a closed thread are rejected (the file is left untouched) with a reopen hint (`reopen with: dgs-tools thread set-status <id> open`). Roll-up counts (`idea_count`/`todo_count`) are always live reverse-index queries — never text stored in the thread file itself.
+
+**Lineage flags.** Sibling commands carry thread-aware engine flags (`dgs-tools` layer): `ideas create --from-thread <id>` and `todo create --from-thread <id>` (mint a new idea/todo pre-linked to a thread, stamping its `links.thread` edge in the SAME create commit), `ideas list --by-thread` and `list-todos --by-thread` (group results under thread headers), and `thread link --relink` (the cardinality-one override described above — moving a child to a different thread always requires it, never silently overwritten).
+
 ### Documents & Search
 
 | Command | Purpose | When to Use |
